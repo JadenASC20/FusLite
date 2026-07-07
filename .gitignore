@@ -1,0 +1,17 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# Compiled shaders
+*.spv
+
+# IDE
+.vs/
+.vscode/
+*.user
+CMakeUserPresets.json
+
+# OS junk
+.DS_Store
+Thumbs.db
