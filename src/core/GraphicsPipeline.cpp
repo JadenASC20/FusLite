@@ -1,8 +1,8 @@
 #include "GraphicsPipeline.h"
 #include "VulkanContext.h"
-#include "RenderPass.h"
 #include "Vertex.h"
 #include "Buffer.h"
+#include "VulkanTexture.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -16,41 +16,57 @@ GraphicsPipeline::~GraphicsPipeline() {}
 void GraphicsPipeline::CreateDescriptorSetLayout()
 {
     VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0; // matches `layout(binding = 0)` in the shader
+    uboLayoutBinding.binding = 0;
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding diffuseSamplerBinding{};
+    diffuseSamplerBinding.binding = 1;
+    diffuseSamplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    diffuseSamplerBinding.descriptorCount = 1;
+    diffuseSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding metallicRoughnessSamplerBinding{};
+    metallicRoughnessSamplerBinding.binding = 2;
+    metallicRoughnessSamplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    metallicRoughnessSamplerBinding.descriptorCount = 1;
+    metallicRoughnessSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding bindings[] = { uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &uboLayoutBinding;
+    layoutInfo.bindingCount = 3;
+    layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor set layout");
     }
 }
 
-void GraphicsPipeline::CreateDescriptorPool(uint32_t numImages)
+void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
 {
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSize.descriptorCount = numImages;
+    VkDescriptorPoolSize poolSizes[2]{};
+    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSizes[0].descriptorCount = maxSets;
+    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSizes[1].descriptorCount = maxSets * 2; // two samplers per set now
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
-    poolInfo.maxSets = numImages;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
+    poolInfo.maxSets = maxSets;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor pool");
     }
-
-    printf("Descriptor pool created.\n");
 }
 
-void GraphicsPipeline::CreateDescriptorSets(const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize)
+std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
+    const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
+    const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture)
 {
     uint32_t numImages = static_cast<uint32_t>(uniformBuffers.size());
     std::vector<VkDescriptorSetLayout> layouts(numImages, m_descriptorSetLayout);
@@ -61,43 +77,63 @@ void GraphicsPipeline::CreateDescriptorSets(const std::vector<BufferAndMemory>& 
     allocInfo.descriptorSetCount = numImages;
     allocInfo.pSetLayouts = layouts.data();
 
-    m_descriptorSets.resize(numImages);
-    if (vkAllocateDescriptorSets(m_device, &allocInfo, m_descriptorSets.data()) != VK_SUCCESS) {
+    std::vector<VkDescriptorSet> sets(numImages);
+    if (vkAllocateDescriptorSets(m_device, &allocInfo, sets.data()) != VK_SUCCESS) {
         throw std::runtime_error("Failed to allocate descriptor sets");
     }
 
-    // One uniform buffer per swapchain image — each gets its own descriptor
-    // set pointing at its own buffer, so frames in flight don't stomp on each other
     for (uint32_t i = 0; i < numImages; i++) {
         VkDescriptorBufferInfo bufferInfo{};
         bufferInfo.buffer = uniformBuffers[i].buffer;
         bufferInfo.offset = 0;
         bufferInfo.range = uniformDataSize;
 
-        VkWriteDescriptorSet descriptorWrite{};
-        descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        descriptorWrite.dstSet = m_descriptorSets[i];
-        descriptorWrite.dstBinding = 0;
-        descriptorWrite.dstArrayElement = 0;
-        descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        descriptorWrite.descriptorCount = 1;
-        descriptorWrite.pBufferInfo = &bufferInfo;
+        VkDescriptorImageInfo diffuseInfo{};
+        diffuseInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        diffuseInfo.imageView = diffuseTexture.view;
+        diffuseInfo.sampler = diffuseTexture.sampler;
 
-        vkUpdateDescriptorSets(m_device, 1, &descriptorWrite, 0, nullptr);
+        VkDescriptorImageInfo mrInfo{};
+        mrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        mrInfo.imageView = metallicRoughnessTexture.view;
+        mrInfo.sampler = metallicRoughnessTexture.sampler;
+
+        VkWriteDescriptorSet writes[3]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = sets[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[0].descriptorCount = 1;
+        writes[0].pBufferInfo = &bufferInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = sets[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].descriptorCount = 1;
+        writes[1].pImageInfo = &diffuseInfo;
+
+        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[2].dstSet = sets[i];
+        writes[2].dstBinding = 2;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[2].descriptorCount = 1;
+        writes[2].pImageInfo = &mrInfo;
+
+        vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
     }
 
-    printf("%u descriptor set(s) created.\n", numImages);
+    return sets;
 }
 
-void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window, const RenderPass& renderPass,
-    VkShaderModule vertShader, VkShaderModule fragShader,
-    const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize)
+void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
+    VkFormat colorFormat, VkFormat depthFormat,
+    VkShaderModule vertShader, VkShaderModule fragShader, uint32_t maxDescriptorSets)
 {
     m_device = context.GetDevice();
 
     CreateDescriptorSetLayout();
-    CreateDescriptorPool(static_cast<uint32_t>(uniformBuffers.size()));
-    CreateDescriptorSets(uniformBuffers, uniformDataSize);
+    CreateDescriptorPool(maxDescriptorSets);
 
     VkPipelineShaderStageCreateInfo shaderStages[2]{};
     shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -160,6 +196,14 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window, const Re
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.minSampleShading = 1.0f;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.stencilTestEnable = VK_FALSE;
+
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_FALSE;
     colorBlendAttachment.colorWriteMask =
@@ -181,8 +225,16 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window, const Re
         throw std::runtime_error("Failed to create pipeline layout");
     }
 
+    // Dynamic rendering: describe attachment formats instead of using a VkRenderPass
+    VkPipelineRenderingCreateInfo renderingInfo{};
+    renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+    renderingInfo.colorAttachmentCount = 1;
+    renderingInfo.pColorAttachmentFormats = &colorFormat;
+    renderingInfo.depthAttachmentFormat = depthFormat;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.pNext = &renderingInfo;
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = shaderStages;
     pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -190,10 +242,10 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window, const Re
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
-    pipelineInfo.pDepthStencilState = nullptr;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = m_pipelineLayout;
-    pipelineInfo.renderPass = renderPass.GetHandle();
+    pipelineInfo.renderPass = VK_NULL_HANDLE; // must be null for dynamic rendering
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
     pipelineInfo.basePipelineIndex = -1;
@@ -202,14 +254,12 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window, const Re
         throw std::runtime_error("Failed to create graphics pipeline");
     }
 
-    printf("Graphics pipeline created.\n");
+    printf("Graphics pipeline created (dynamic rendering).\n");
 }
 
-void GraphicsPipeline::Bind(VkCommandBuffer commandBuffer, uint32_t imageIndex) const
+void GraphicsPipeline::Bind(VkCommandBuffer commandBuffer) const
 {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
-        0, 1, &m_descriptorSets[imageIndex], 0, nullptr);
 }
 
 void GraphicsPipeline::Cleanup()
@@ -219,7 +269,7 @@ void GraphicsPipeline::Cleanup()
         m_descriptorSetLayout = VK_NULL_HANDLE;
     }
     if (m_descriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr); // also frees the descriptor sets
+        vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
         m_descriptorPool = VK_NULL_HANDLE;
     }
     if (m_pipeline != VK_NULL_HANDLE) {

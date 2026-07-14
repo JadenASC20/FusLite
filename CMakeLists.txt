@@ -36,6 +36,22 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(glfw glm volk vma)
 
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+)
+FetchContent_MakeAvailable(stb)
+
+FetchContent_Declare(
+    assimp
+    GIT_REPOSITORY https://github.com/assimp/assimp.git
+    GIT_TAG v5.4.3
+)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(assimp)
+
 add_executable(FusLite 
     src/main.cpp 
     src/core/VulkanContext.cpp
@@ -45,11 +61,14 @@ add_executable(FusLite
     src/core/RenderPass.cpp
     src/core/GraphicsPipeline.cpp
     src/core/Camera.cpp
+    src/core/Model.cpp
+    src/core/stb_image_impl.cpp
 )
 
 target_link_libraries(FusLite PRIVATE
     glfw
     volk
+    assimp
     Vulkan::Vulkan
 )
 
@@ -57,6 +76,7 @@ target_include_directories(FusLite PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${glm_SOURCE_DIR}
     ${vma_SOURCE_DIR}/include
+    ${stb_SOURCE_DIR}
 )
 
 find_program(GLSLC glslc REQUIRED)
@@ -78,3 +98,8 @@ endforeach()
 
 add_custom_target(Shaders DEPENDS ${SPIRV_BINARIES})
 add_dependencies(FusLite Shaders)
+
+add_custom_command(TARGET FusLite POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    "${CMAKE_SOURCE_DIR}/assets" "$<TARGET_FILE_DIR:FusLite>/assets"
+)

@@ -17,6 +17,7 @@ public:
     void OnKey(int key, int action);
     void OnMouseMove(double x, double y);
     void OnMouseButton(int button, int action);
+    glm::vec3 GetPosition() const { return m_position; }
 
 private:
     glm::vec3 m_position;

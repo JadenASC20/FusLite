@@ -5,6 +5,7 @@
 #include <string>
 #include <VulkanQueue.h>
 #include <Buffer.h>
+#include <VulkanTexture.h>
 
 struct GLFWwindow;
 
@@ -61,6 +62,15 @@ public:
     
     BufferAndMemory CreateVertexBuffer(const void* data, VkDeviceSize size);
     BufferAndMemory CreateUniformBuffer(VkDeviceSize size);
+    BufferAndMemory CreateIndexBuffer(const void* data, VkDeviceSize size);
+
+    VulkanTexture CreateTexture(const char* filename);
+    VkFormat FindDepthFormat();
+
+    VulkanTexture CreateTexture(const char* filename, bool isColorData);
+    VulkanTexture CreateTextureFromMemory(const unsigned char* data, size_t size, bool isColorData);
+    VulkanTexture CreateTextureFromRawRGBA(const unsigned char* pixels, uint32_t width, uint32_t height, bool isColorData);
+    VulkanTexture CreateSolidColorTexture(float r, float g, float b, float a, bool isColorData);
 
 private:
     void CreateInstance(const char* pAppName);
@@ -105,4 +115,15 @@ private:
     BufferAndMemory CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties);
     uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     void CopyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
+
+    void CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,
+    VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& memory);
+    VkImageView CreateImageView(VkImage image, VkFormat format);
+    VkSampler CreateTextureSampler();
+    void TransitionImageLayout(VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout);
+    void CopyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
+
+    VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+
+    bool CheckDynamicRenderingSupport(VkPhysicalDevice device);
 };

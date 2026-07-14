@@ -14,15 +14,16 @@ public:
     void Init(VulkanContext& context, const Swapchain& swapchain);
     void Cleanup();
 
-    VkRenderPass GetHandle() const { return m_renderPass; }
-    const std::vector<VkFramebuffer>& GetFramebuffers() const { return m_framebuffers; }
+    const std::vector<VkImageView>& GetDepthImageViews() const { return m_depthImageViews; }
+    VkFormat GetDepthFormat() const { return m_depthFormat; }
+    const std::vector<VkImage>& GetDepthImages() const { return m_depthImages; }
 
 private:
-    void CreateRenderPass(VkFormat swapchainFormat);
-    void CreateFramebuffers(const Swapchain& swapchain);
+    void CreateDepthResources(const Swapchain& swapchain);
 
     VulkanContext* m_context = nullptr;
-
-    VkRenderPass m_renderPass = VK_NULL_HANDLE;
-    std::vector<VkFramebuffer> m_framebuffers;
+    VkFormat m_depthFormat = VK_FORMAT_UNDEFINED;
+    std::vector<VkImage> m_depthImages;
+    std::vector<VkDeviceMemory> m_depthImageMemories;
+    std::vector<VkImageView> m_depthImageViews;
 };
