@@ -8,6 +8,7 @@
 #include "Buffer.h"
 #include "Vertex.h"
 #include "VulkanTexture.h"
+#include "VulkanContext.h"
 
 class VulkanContext;
 class GraphicsPipeline;
@@ -27,7 +28,8 @@ class Model
 public:
     void LoadFromFile(VulkanContext& context, const std::string& path);
     void CreateDescriptorSets(GraphicsPipeline& pipeline,
-        const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize);
+        const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
+        const VulkanContext::IBLTextures& iblTextures);
     void Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex) const;
     void Cleanup(VkDevice device);
 

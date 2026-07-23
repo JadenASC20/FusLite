@@ -12,6 +12,9 @@
 #include <set>
 #include <stb_image.h>
 #include <VulkanTexture.h>
+#include <cmath>
+#include <algorithm>
+#include <glm/glm.hpp>
 
 // Debug callback — this is what actually prints validation layer messages
 static VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(
@@ -904,5 +907,607 @@ bool VulkanContext::CheckDynamicRenderingSupport(VkPhysicalDevice device)
         }
     }
     return false;
+}
+
+// Converts a cubemap face UV (in [-1,1]) + face index into a 3D direction vector
+static glm::vec3 CubeFaceDirection(int face, float u, float v)
+{
+    switch (face) {
+    case 0: return glm::normalize(glm::vec3(1.0f, -v, -u)); // +X
+    case 1: return glm::normalize(glm::vec3(-1.0f, -v, u)); // -X
+    case 2: return glm::normalize(glm::vec3(u, 1.0f, v)); // +Y
+    case 3: return glm::normalize(glm::vec3(u, -1.0f, -v)); // -Y
+    case 4: return glm::normalize(glm::vec3(u, -v, 1.0f)); // +Z
+    default:return glm::normalize(glm::vec3(-u, -v, -1.0f)); // -Z
+    }
+}
+
+// Bilinear sample of an equirectangular float image at a given direction
+static void SampleEquirect(const float* pixels, int width, int height, int channels, glm::vec3 dir, float* outRGBA)
+{
+    float phi = atan2f(dir.z, dir.x);          // -PI..PI
+    float theta = acosf(glm::clamp(dir.y, -1.0f, 1.0f)); // 0..PI
+
+    float u = (phi + 3.14159265f) / (2.0f * 3.14159265f);
+    float v = theta / 3.14159265f;
+
+    float fx = u * (width - 1);
+    float fy = v * (height - 1);
+
+    int x0 = static_cast<int>(fx), y0 = static_cast<int>(fy);
+    int x1 = std::min(x0 + 1, width - 1);
+    int y1 = std::min(y0 + 1, height - 1);
+    float tx = fx - x0, ty = fy - y0;
+
+    auto pixelAt = [&](int px, int py, int c) {
+        return pixels[(py * width + px) * channels + c];
+    };
+
+    for (int c = 0; c < 4; c++) {
+        float src = (c < channels) ? 1.0f : 0.0f; // alpha default 1.0 if source has no alpha
+        if (c < channels) {
+            float p00 = pixelAt(x0, y0, c);
+            float p10 = pixelAt(x1, y0, c);
+            float p01 = pixelAt(x0, y1, c);
+            float p11 = pixelAt(x1, y1, c);
+            float top = p00 * (1 - tx) + p10 * tx;
+            float bot = p01 * (1 - tx) + p11 * tx;
+            src = top * (1 - ty) + bot * ty;
+        }
+        outRGBA[c] = src;
+    }
+}
+
+static float RadicalInverse_VdC(uint32_t bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10f;
+}
+
+static glm::vec2 Hammersley(uint32_t i, uint32_t N)
+{
+    return glm::vec2(float(i) / float(N), RadicalInverse_VdC(i));
+}
+
+static glm::vec3 ImportanceSampleGGX(glm::vec2 Xi, glm::vec3 N, float roughness)
+{
+    float a = roughness * roughness;
+    float phi = 2.0f * 3.14159265f * Xi.x;
+    float cosTheta = sqrtf((1.0f - Xi.y) / (1.0f + (a * a - 1.0f) * Xi.y));
+    float sinTheta = sqrtf(1.0f - cosTheta * cosTheta);
+
+    glm::vec3 H(cosf(phi) * sinTheta, sinf(phi) * sinTheta, cosTheta);
+
+    glm::vec3 up = fabsf(N.z) < 0.999f ? glm::vec3(0, 0, 1) : glm::vec3(1, 0, 0);
+    glm::vec3 tangent = glm::normalize(glm::cross(up, N));
+    glm::vec3 bitangent = glm::cross(N, tangent);
+
+    return glm::normalize(tangent * H.x + bitangent * H.y + N * H.z);
+}
+
+static float GeometrySchlickGGX_IBL(float NdotV, float roughness)
+{
+    float k = (roughness * roughness) / 2.0f;
+    return NdotV / (NdotV * (1.0f - k) + k);
+}
+
+static float GeometrySmith_IBL(glm::vec3 N, glm::vec3 V, glm::vec3 L, float roughness)
+{
+    float NdotV = std::max(glm::dot(N, V), 0.0f);
+    float NdotL = std::max(glm::dot(N, L), 0.0f);
+    return GeometrySchlickGGX_IBL(NdotV, roughness) * GeometrySchlickGGX_IBL(NdotL, roughness);
+}
+
+static glm::vec2 IntegrateBRDF(float NdotV, float roughness, uint32_t sampleCount)
+{
+    glm::vec3 V(sqrtf(1.0f - NdotV * NdotV), 0.0f, NdotV);
+    glm::vec3 N(0.0f, 0.0f, 1.0f);
+    float A = 0.0f, B = 0.0f;
+
+    for (uint32_t i = 0; i < sampleCount; i++) {
+        glm::vec2 Xi = Hammersley(i, sampleCount);
+        glm::vec3 H = ImportanceSampleGGX(Xi, N, roughness);
+        glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
+
+        float NdotL = std::max(L.z, 0.0f);
+        float NdotH = std::max(H.z, 0.0f);
+        float VdotH = std::max(glm::dot(V, H), 0.0f);
+
+        if (NdotL > 0.0f) {
+            float G = GeometrySmith_IBL(N, V, L, roughness);
+            float G_Vis = (G * VdotH) / (NdotH * NdotV + 1e-5f);
+            float Fc = powf(1.0f - VdotH, 5.0f);
+            A += (1.0f - Fc) * G_Vis;
+            B += Fc * G_Vis;
+        }
+    }
+    return glm::vec2(A / float(sampleCount), B / float(sampleCount));
+}
+
+void VulkanContext::CreateCubemapImage(uint32_t faceSize, VkFormat format, uint32_t mipLevels, VkImage& image, VkDeviceMemory& memory)
+{
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent = { faceSize, faceSize, 1 };
+    imageInfo.mipLevels = mipLevels;
+    imageInfo.arrayLayers = 6;
+    imageInfo.format = format;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateImage(m_device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create cubemap image");
+    }
+
+    VkMemoryRequirements memRequirements;
+    vkGetImageMemoryRequirements(m_device, image, &memRequirements);
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = FindMemoryType(memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    if (vkAllocateMemory(m_device, &allocInfo, nullptr, &memory) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to allocate cubemap image memory");
+    }
+    vkBindImageMemory(m_device, image, memory, 0);
+}
+
+VkImageView VulkanContext::CreateCubemapImageView(VkImage image, VkFormat format, uint32_t mipLevels)
+{
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = mipLevels;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 6;
+
+    VkImageView view;
+    if (vkCreateImageView(m_device, &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create cubemap image view");
+    }
+    return view;
+}
+
+VkSampler VulkanContext::CreateMippedCubemapSampler(uint32_t mipLevels)
+{
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.minLod = 0.0f;
+    samplerInfo.maxLod = static_cast<float>(mipLevels - 1);
+
+    VkSampler sampler;
+    if (vkCreateSampler(m_device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create mipped cubemap sampler");
+    }
+    return sampler;
+}
+
+VulkanTexture VulkanContext::CreateEquirectangularCubemap(const char* filename, uint32_t faceSize)
+{
+    int width, height, channels;
+    // stbi_loadf: loads as float, correct for HDR source images (.hdr files)
+    float* pixels = stbi_loadf(filename, &width, &height, &channels, 0);
+    if (!pixels) {
+        throw std::runtime_error(std::string("Failed to load equirectangular image: ") + filename);
+    }
+
+    printf("Converting equirectangular image (%dx%d, %d channels) to %ux%u cubemap...\n",
+        width, height, channels, faceSize, faceSize);
+
+    VkFormat format = VK_FORMAT_R32G32B32A32_SFLOAT; // HDR data needs float storage, not 8-bit
+
+    // Build all 6 faces in CPU memory first
+    size_t faceBytes = static_cast<size_t>(faceSize) * faceSize * 4 * sizeof(float);
+    std::vector<float> allFaces(6 * faceSize * faceSize * 4);
+
+    for (int face = 0; face < 6; face++) {
+        for (uint32_t y = 0; y < faceSize; y++) {
+            for (uint32_t x = 0; x < faceSize; x++) {
+                float u = (2.0f * (x + 0.5f) / faceSize) - 1.0f;
+                float v = (2.0f * (y + 0.5f) / faceSize) - 1.0f;
+
+                glm::vec3 dir = CubeFaceDirection(face, u, v);
+
+                float rgba[4];
+                SampleEquirect(pixels, width, height, channels, dir, rgba);
+
+                size_t idx = ((face * faceSize + y) * faceSize + x) * 4;
+                allFaces[idx + 0] = rgba[0];
+                allFaces[idx + 1] = rgba[1];
+                allFaces[idx + 2] = rgba[2];
+                allFaces[idx + 3] = rgba[3];
+            }
+        }
+    }
+
+    stbi_image_free(pixels);
+
+    // Upload: staging buffer -> cubemap image (6 layers)
+    VkDeviceSize totalSize = static_cast<VkDeviceSize>(allFaces.size()) * sizeof(float);
+
+    BufferAndMemory staging = CreateBuffer(totalSize,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    void* data;
+    vkMapMemory(m_device, staging.memory, 0, totalSize, 0, &data);
+    memcpy(data, allFaces.data(), static_cast<size_t>(totalSize));
+    vkUnmapMemory(m_device, staging.memory);
+
+    VulkanTexture cubemap;
+    CreateCubemapImage(faceSize, format, 1, cubemap.image, cubemap.memory);
+
+    // Transition all 6 layers to transfer-dst, copy each face, then to shader-read
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = m_commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(m_device, &allocInfo, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier toDst{};
+    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.image = cubemap.image;
+    toDst.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 6 };
+    toDst.srcAccessMask = 0;
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+    std::vector<VkBufferImageCopy> regions(6);
+    for (int face = 0; face < 6; face++) {
+        VkBufferImageCopy region{};
+        region.bufferOffset = static_cast<VkDeviceSize>(face) * faceSize * faceSize * 4 * sizeof(float);
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = 0;
+        region.imageSubresource.baseArrayLayer = face;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = { faceSize, faceSize, 1 };
+        regions[face] = region;
+    }
+    vkCmdCopyBufferToImage(cmd, staging.buffer, cubemap.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        static_cast<uint32_t>(regions.size()), regions.data());
+
+    VkImageMemoryBarrier toRead = toDst;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &toRead);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    VkQueue graphicsQueue;
+    vkGetDeviceQueue(m_device, m_availableDevices[m_selectedDeviceIndex].queueFamilyIndices.graphicsFamily.value(), 0, &graphicsQueue);
+    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+
+    staging.Destroy(m_device);
+
+    cubemap.view = CreateCubemapImageView(cubemap.image, format, 1);
+    cubemap.sampler = CreateTextureSampler();
+
+    printf("Cubemap created from equirectangular image.\n");
+
+    return cubemap;
+}
+
+VulkanTexture VulkanContext::UploadCubemapMips(const std::vector<std::vector<float>>& mipFaceData,
+    const std::vector<uint32_t>& mipSizes, VkFormat format)
+{
+    uint32_t mipLevels = static_cast<uint32_t>(mipFaceData.size());
+
+    VulkanTexture texture;
+    CreateCubemapImage(mipSizes[0], format, mipLevels, texture.image, texture.memory);
+
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandPool = m_commandPool;
+    allocInfo.commandBufferCount = 1;
+
+    VkCommandBuffer cmd;
+    vkAllocateCommandBuffers(m_device, &allocInfo, &cmd);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &beginInfo);
+
+    VkImageMemoryBarrier toDst{};
+    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.image = texture.image;
+    toDst.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 6 };
+    toDst.srcAccessMask = 0;
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+    std::vector<BufferAndMemory> stagingBuffers(mipLevels);
+
+    for (uint32_t mip = 0; mip < mipLevels; mip++) {
+        VkDeviceSize mipByteSize = static_cast<VkDeviceSize>(mipFaceData[mip].size()) * sizeof(float);
+        stagingBuffers[mip] = CreateBuffer(mipByteSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+        void* data;
+        vkMapMemory(m_device, stagingBuffers[mip].memory, 0, mipByteSize, 0, &data);
+        memcpy(data, mipFaceData[mip].data(), static_cast<size_t>(mipByteSize));
+        vkUnmapMemory(m_device, stagingBuffers[mip].memory);
+
+        for (uint32_t face = 0; face < 6; face++) {
+            VkBufferImageCopy region{};
+            region.bufferOffset = static_cast<VkDeviceSize>(face) * mipSizes[mip] * mipSizes[mip] * 4 * sizeof(float);
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = mip;
+            region.imageSubresource.baseArrayLayer = face;
+            region.imageSubresource.layerCount = 1;
+            region.imageExtent = { mipSizes[mip], mipSizes[mip], 1 };
+            vkCmdCopyBufferToImage(cmd, stagingBuffers[mip].buffer, texture.image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        }
+    }
+
+    VkImageMemoryBarrier toRead = toDst;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &toRead);
+
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+
+    VkQueue graphicsQueue;
+    vkGetDeviceQueue(m_device, m_availableDevices[m_selectedDeviceIndex].queueFamilyIndices.graphicsFamily.value(), 0, &graphicsQueue);
+    vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    vkFreeCommandBuffers(m_device, m_commandPool, 1, &cmd);
+
+    for (auto& sb : stagingBuffers) sb.Destroy(m_device);
+
+    texture.view = CreateCubemapImageView(texture.image, format, mipLevels);
+    texture.sampler = (mipLevels > 1) ? CreateMippedCubemapSampler(mipLevels) : CreateTextureSampler();
+
+    return texture;
+}
+
+VulkanTexture VulkanContext::CreateIrradianceCubemap(const float* equirectPixels, int width, int height, int channels, uint32_t faceSize)
+{
+    printf("Generating irradiance cubemap (%ux%u)...\n", faceSize, faceSize);
+
+    std::vector<float> faceData(static_cast<size_t>(faceSize) * faceSize * 6 * 4);
+    const float PI = 3.14159265359f;
+    const float sampleDelta = 0.1f; // coarse step — irradiance is very low-frequency, this is plenty
+
+    for (int face = 0; face < 6; face++) {
+        for (uint32_t y = 0; y < faceSize; y++) {
+            for (uint32_t x = 0; x < faceSize; x++) {
+                float u = (2.0f * (x + 0.5f) / faceSize) - 1.0f;
+                float v = (2.0f * (y + 0.5f) / faceSize) - 1.0f;
+                glm::vec3 N = CubeFaceDirection(face, u, v);
+
+                glm::vec3 up = fabsf(N.y) < 0.999f ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
+                glm::vec3 right = glm::normalize(glm::cross(up, N));
+                up = glm::cross(N, right);
+
+                glm::vec3 irradiance(0.0f);
+                int sampleCount = 0;
+
+                for (float phi = 0.0f; phi < 2.0f * PI; phi += sampleDelta) {
+                    for (float theta = 0.0f; theta < 0.5f * PI; theta += sampleDelta) {
+                        glm::vec3 tangentSample(sinf(theta) * cosf(phi), sinf(theta) * sinf(phi), cosf(theta));
+                        glm::vec3 sampleVec = tangentSample.x * right + tangentSample.y * up + tangentSample.z * N;
+
+                        float rgba[4];
+                        SampleEquirect(equirectPixels, width, height, channels, glm::normalize(sampleVec), rgba);
+
+                        irradiance += glm::vec3(rgba[0], rgba[1], rgba[2]) * cosf(theta) * sinf(theta);
+                        sampleCount++;
+                    }
+                }
+                irradiance = PI * irradiance * (1.0f / float(sampleCount));
+
+                size_t idx = ((static_cast<size_t>(face) * faceSize + y) * faceSize + x) * 4;
+                faceData[idx + 0] = irradiance.x;
+                faceData[idx + 1] = irradiance.y;
+                faceData[idx + 2] = irradiance.z;
+                faceData[idx + 3] = 1.0f;
+            }
+        }
+    }
+
+    std::vector<std::vector<float>> mipFaceData = { faceData };
+    std::vector<uint32_t> mipSizes = { faceSize };
+
+    VulkanTexture result = UploadCubemapMips(mipFaceData, mipSizes, VK_FORMAT_R32G32B32A32_SFLOAT);
+    printf("Irradiance cubemap generated.\n");
+    return result;
+}
+
+VulkanTexture VulkanContext::CreatePrefilteredSpecularCubemap(const float* equirectPixels, int width, int height, int channels,
+    uint32_t baseFaceSize, uint32_t mipLevels)
+{
+    printf("Generating prefiltered specular cubemap (%u mips)...\n", mipLevels);
+
+    std::vector<std::vector<float>> mipFaceData(mipLevels);
+    std::vector<uint32_t> mipSizes(mipLevels);
+    const uint32_t sampleCount = 32;
+
+    for (uint32_t mip = 0; mip < mipLevels; mip++) {
+        uint32_t faceSize = std::max(1u, baseFaceSize >> mip);
+        mipSizes[mip] = faceSize;
+        float roughness = (mipLevels > 1) ? float(mip) / float(mipLevels - 1) : 0.0f;
+
+        std::vector<float>& faceData = mipFaceData[mip];
+        faceData.resize(static_cast<size_t>(faceSize) * faceSize * 6 * 4);
+
+        for (int face = 0; face < 6; face++) {
+            for (uint32_t y = 0; y < faceSize; y++) {
+                for (uint32_t x = 0; x < faceSize; x++) {
+                    float u = (2.0f * (x + 0.5f) / faceSize) - 1.0f;
+                    float v = (2.0f * (y + 0.5f) / faceSize) - 1.0f;
+                    glm::vec3 N = glm::normalize(CubeFaceDirection(face, u, v));
+                    glm::vec3 V = N;
+
+                    glm::vec3 prefilteredColor(0.0f);
+                    float totalWeight = 0.0f;
+
+                    for (uint32_t i = 0; i < sampleCount; i++) {
+                        glm::vec2 Xi = Hammersley(i, sampleCount);
+                        glm::vec3 H = ImportanceSampleGGX(Xi, N, roughness);
+                        glm::vec3 L = glm::normalize(2.0f * glm::dot(V, H) * H - V);
+
+                        float NdotL = glm::dot(N, L);
+                        if (NdotL > 0.0f) {
+                            float rgba[4];
+                            SampleEquirect(equirectPixels, width, height, channels, glm::normalize(L), rgba);
+                            prefilteredColor += glm::vec3(rgba[0], rgba[1], rgba[2]) * NdotL;
+                            totalWeight += NdotL;
+                        }
+                    }
+                    if (totalWeight > 0.0f) prefilteredColor /= totalWeight;
+
+                    size_t idx = ((static_cast<size_t>(face) * faceSize + y) * faceSize + x) * 4;
+                    faceData[idx + 0] = prefilteredColor.x;
+                    faceData[idx + 1] = prefilteredColor.y;
+                    faceData[idx + 2] = prefilteredColor.z;
+                    faceData[idx + 3] = 1.0f;
+                }
+            }
+        }
+    }
+
+    VulkanTexture result = UploadCubemapMips(mipFaceData, mipSizes, VK_FORMAT_R32G32B32A32_SFLOAT);
+    printf("Prefiltered specular cubemap generated.\n");
+    return result;
+}
+
+VulkanTexture VulkanContext::CreateBRDFLUT(uint32_t size)
+{
+    printf("Generating BRDF integration LUT (%ux%u)...\n", size, size);
+
+    std::vector<float> lutData(static_cast<size_t>(size) * size * 2);
+
+    for (uint32_t y = 0; y < size; y++) {
+        for (uint32_t x = 0; x < size; x++) {
+            float NdotV = (x + 0.5f) / float(size);
+            float roughness = (y + 0.5f) / float(size);
+            glm::vec2 result = IntegrateBRDF(NdotV, roughness, 256);
+
+            size_t idx = (static_cast<size_t>(y) * size + x) * 2;
+            lutData[idx + 0] = result.x;
+            lutData[idx + 1] = result.y;
+        }
+    }
+
+    VulkanTexture texture;
+    VkFormat format = VK_FORMAT_R32G32_SFLOAT;
+    VkDeviceSize dataSize = static_cast<VkDeviceSize>(lutData.size()) * sizeof(float);
+
+    BufferAndMemory staging = CreateBuffer(dataSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    void* data;
+    vkMapMemory(m_device, staging.memory, 0, dataSize, 0, &data);
+    memcpy(data, lutData.data(), static_cast<size_t>(dataSize));
+    vkUnmapMemory(m_device, staging.memory);
+
+    CreateImage(size, size, format, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, texture.image, texture.memory);
+
+    TransitionImageLayout(texture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    CopyBufferToImage(staging.buffer, texture.image, size, size);
+    TransitionImageLayout(texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    staging.Destroy(m_device);
+
+    texture.view = CreateImageView(texture.image, format);
+
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    if (vkCreateSampler(m_device, &samplerInfo, nullptr, &texture.sampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create BRDF LUT sampler");
+    }
+
+    printf("BRDF LUT generated.\n");
+    return texture;
+}
+
+VulkanContext::IBLTextures VulkanContext::CreateIBLFromEquirect(const char* filename)
+{
+    int width, height, channels;
+    float* pixels = stbi_loadf(filename, &width, &height, &channels, 0);
+    if (!pixels) {
+        throw std::runtime_error(std::string("Failed to load equirectangular image: ") + filename);
+    }
+
+    printf("Building IBL data from %s (%dx%d)...\n", filename, width, height);
+
+    IBLTextures result;
+    result.prefilteredMipLevels = 5;
+    result.irradiance = CreateIrradianceCubemap(pixels, width, height, channels, 32);
+    result.prefilteredSpecular = CreatePrefilteredSpecularCubemap(pixels, width, height, channels, 128, result.prefilteredMipLevels);
+    result.brdfLUT = CreateBRDFLUT(128);
+
+    stbi_image_free(pixels);
+
+    printf("IBL generation complete.\n");
+    return result;
 }
 

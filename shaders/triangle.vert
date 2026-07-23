@@ -4,6 +4,10 @@ layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    vec4 cameraPos;
+    vec4 lightPosAndRadius[4];
+    vec4 lightColorAndIntensity[4];
+    vec4 numLightsPacked;
 } ubo;
 
 layout(location = 0) in vec3 inPosition;

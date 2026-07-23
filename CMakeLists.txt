@@ -8,6 +8,16 @@ find_package(Vulkan REQUIRED)
 
 include(FetchContent)
 
+set(IMGUI_DIR "$ENV{USERPROFILE}/Documents/imgui" CACHE PATH "Path to local ImGui clone")
+set(IMGUIZMO_DIR "$ENV{USERPROFILE}/Documents/ImGuizmo/src" CACHE PATH "Path to local ImGuizmo clone")
+
+if(NOT EXISTS "${IMGUI_DIR}/imgui.h")
+    message(FATAL_ERROR "ImGui not found at ${IMGUI_DIR} — clone it there or set IMGUI_DIR")
+endif()
+if(NOT EXISTS "${IMGUIZMO_DIR}/ImGuizmo.h")
+    message(FATAL_ERROR "ImGuizmo not found at ${IMGUIZMO_DIR} — clone it there or set IMGUIZMO_DIR")
+endif()
+
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -63,6 +73,23 @@ add_executable(FusLite
     src/core/Camera.cpp
     src/core/Model.cpp
     src/core/stb_image_impl.cpp
+    src/core/TonemapPipeline.cpp
+    src/core/Skybox.cpp
+    src/core/ImGuiManager.cpp
+
+    # ImGui core
+    ${IMGUI_DIR}/imgui.cpp
+    ${IMGUI_DIR}/imgui_draw.cpp
+    ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp
+    ${IMGUI_DIR}/imgui_demo.cpp
+
+    # ImGui backends
+    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+    ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp
+
+    # ImGuizmo
+    ${IMGUIZMO_DIR}/ImGuizmo.cpp
 )
 
 target_link_libraries(FusLite PRIVATE
@@ -77,6 +104,14 @@ target_include_directories(FusLite PRIVATE
     ${glm_SOURCE_DIR}
     ${vma_SOURCE_DIR}/include
     ${stb_SOURCE_DIR}
+    ${IMGUI_DIR}
+    ${IMGUI_DIR}/backends
+    ${IMGUIZMO_DIR}
+)
+
+target_compile_definitions(FusLite PRIVATE 
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    IMGUI_IMPL_VULKAN_USE_VOLK
 )
 
 find_program(GLSLC glslc REQUIRED)

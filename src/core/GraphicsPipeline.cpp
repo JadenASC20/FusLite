@@ -3,6 +3,7 @@
 #include "Vertex.h"
 #include "Buffer.h"
 #include "VulkanTexture.h"
+#include "RenderParams.h"
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -33,11 +34,32 @@ void GraphicsPipeline::CreateDescriptorSetLayout()
     metallicRoughnessSamplerBinding.descriptorCount = 1;
     metallicRoughnessSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    VkDescriptorSetLayoutBinding bindings[] = { uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding };
+    VkDescriptorSetLayoutBinding irradianceBinding{};
+    irradianceBinding.binding = 3;
+    irradianceBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    irradianceBinding.descriptorCount = 1;
+    irradianceBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding prefilteredBinding{};
+    prefilteredBinding.binding = 4;
+    prefilteredBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    prefilteredBinding.descriptorCount = 1;
+    prefilteredBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding brdfLUTBinding{};
+    brdfLUTBinding.binding = 5;
+    brdfLUTBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    brdfLUTBinding.descriptorCount = 1;
+    brdfLUTBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding bindings[] = {
+        uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding,
+        irradianceBinding, prefilteredBinding, brdfLUTBinding
+    };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 3;
+    layoutInfo.bindingCount = 6;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
@@ -51,7 +73,7 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = maxSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = maxSets * 2; // two samplers per set now
+    poolSizes[1].descriptorCount = maxSets * 5; // 5 samplers per set now (diffuse, mr, irradiance, prefiltered, brdfLUT)
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -66,7 +88,8 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
 
 std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
     const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
-    const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture)
+    const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture,
+    const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture, const VulkanTexture& brdfLUTTexture)
 {
     uint32_t numImages = static_cast<uint32_t>(uniformBuffers.size());
     std::vector<VkDescriptorSetLayout> layouts(numImages, m_descriptorSetLayout);
@@ -98,7 +121,22 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         mrInfo.imageView = metallicRoughnessTexture.view;
         mrInfo.sampler = metallicRoughnessTexture.sampler;
 
-        VkWriteDescriptorSet writes[3]{};
+        VkDescriptorImageInfo irradianceInfo{};
+        irradianceInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        irradianceInfo.imageView = irradianceTexture.view;
+        irradianceInfo.sampler = irradianceTexture.sampler;
+
+        VkDescriptorImageInfo prefilteredInfo{};
+        prefilteredInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        prefilteredInfo.imageView = prefilteredTexture.view;
+        prefilteredInfo.sampler = prefilteredTexture.sampler;
+
+        VkDescriptorImageInfo brdfLUTInfo{};
+        brdfLUTInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        brdfLUTInfo.imageView = brdfLUTTexture.view;
+        brdfLUTInfo.sampler = brdfLUTTexture.sampler;
+
+        VkWriteDescriptorSet writes[6]{};
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = sets[i];
         writes[0].dstBinding = 0;
@@ -120,7 +158,28 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         writes[2].descriptorCount = 1;
         writes[2].pImageInfo = &mrInfo;
 
-        vkUpdateDescriptorSets(m_device, 3, writes, 0, nullptr);
+        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[3].dstSet = sets[i];
+        writes[3].dstBinding = 3;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[3].descriptorCount = 1;
+        writes[3].pImageInfo = &irradianceInfo;
+
+        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[4].dstSet = sets[i];
+        writes[4].dstBinding = 4;
+        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[4].descriptorCount = 1;
+        writes[4].pImageInfo = &prefilteredInfo;
+
+        writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[5].dstSet = sets[i];
+        writes[5].dstBinding = 5;
+        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[5].descriptorCount = 1;
+        writes[5].pImageInfo = &brdfLUTInfo;
+
+        vkUpdateDescriptorSets(m_device, 6, writes, 0, nullptr);
     }
 
     return sets;
@@ -216,10 +275,17 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(RenderParams);
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.setLayoutCount = 1;
     layoutInfo.pSetLayouts = &m_descriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
 
     if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create pipeline layout");
@@ -280,4 +346,10 @@ void GraphicsPipeline::Cleanup()
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
     }
+}
+
+void GraphicsPipeline::PushParams(VkCommandBuffer commandBuffer, const RenderParams& params) const
+{
+    vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(RenderParams), &params);
 }

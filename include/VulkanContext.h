@@ -40,6 +40,7 @@ struct PhysicalDeviceInfo
     }
 };
 
+
 class VulkanContext
 {
 public:
@@ -71,6 +72,18 @@ public:
     VulkanTexture CreateTextureFromMemory(const unsigned char* data, size_t size, bool isColorData);
     VulkanTexture CreateTextureFromRawRGBA(const unsigned char* pixels, uint32_t width, uint32_t height, bool isColorData);
     VulkanTexture CreateSolidColorTexture(float r, float g, float b, float a, bool isColorData);
+
+    VulkanTexture CreateEquirectangularCubemap(const char* filename, uint32_t faceSize = 512);
+
+    struct IBLTextures
+    {
+        VulkanTexture irradiance;
+        VulkanTexture prefilteredSpecular;
+        uint32_t prefilteredMipLevels = 5;
+        VulkanTexture brdfLUT;
+    };
+
+    IBLTextures CreateIBLFromEquirect(const char* filename);
 
 private:
     void CreateInstance(const char* pAppName);
@@ -126,4 +139,16 @@ private:
     VkFormat FindSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
 
     bool CheckDynamicRenderingSupport(VkPhysicalDevice device);
+
+    void CreateCubemapImage(uint32_t faceSize, VkFormat format, uint32_t mipLevels, VkImage& image, VkDeviceMemory& memory);
+    VkImageView CreateCubemapImageView(VkImage image, VkFormat format, uint32_t mipLevels);
+    VkSampler CreateMippedCubemapSampler(uint32_t mipLevels);
+
+    VulkanTexture UploadCubemapMips(const std::vector<std::vector<float>>& mipFaceData,
+        const std::vector<uint32_t>& mipSizes, VkFormat format);
+
+    VulkanTexture CreateIrradianceCubemap(const float* equirectPixels, int width, int height, int channels, uint32_t faceSize);
+    VulkanTexture CreatePrefilteredSpecularCubemap(const float* equirectPixels, int width, int height, int channels,
+        uint32_t baseFaceSize, uint32_t mipLevels);
+    VulkanTexture CreateBRDFLUT(uint32_t size);
 };

@@ -150,13 +150,15 @@ void Model::LoadFromFile(VulkanContext& context, const std::string& path)
 }
 
 void Model::CreateDescriptorSets(GraphicsPipeline& pipeline,
-    const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize)
+    const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
+    const VulkanContext::IBLTextures& iblTextures)
 {
     m_descriptorSets.resize(m_diffuseTextures.size());
 
     for (size_t matIdx = 0; matIdx < m_diffuseTextures.size(); matIdx++) {
         m_descriptorSets[matIdx] = pipeline.CreateDescriptorSetsForMaterial(
-            uniformBuffers, uniformDataSize, m_diffuseTextures[matIdx], m_metallicRoughnessTextures[matIdx]);
+            uniformBuffers, uniformDataSize, m_diffuseTextures[matIdx], m_metallicRoughnessTextures[matIdx],
+            iblTextures.irradiance, iblTextures.prefilteredSpecular, iblTextures.brdfLUT);
     }
 }
 
