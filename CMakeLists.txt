@@ -76,6 +76,9 @@ add_executable(FusLite
     src/core/TonemapPipeline.cpp
     src/core/Skybox.cpp
     src/core/ImGuiManager.cpp
+    src/core/ComputeTest.cpp
+    src/core/ClusterBuilder.cpp
+    src/core/LightCuller.cpp
 
     # ImGui core
     ${IMGUI_DIR}/imgui.cpp
@@ -116,7 +119,7 @@ target_compile_definitions(FusLite PRIVATE
 
 find_program(GLSLC glslc REQUIRED)
 
-file(GLOB SHADER_SOURCES "${CMAKE_SOURCE_DIR}/shaders/*.vert" "${CMAKE_SOURCE_DIR}/shaders/*.frag")
+file(GLOB SHADER_SOURCES "${CMAKE_SOURCE_DIR}/shaders/*.vert" "${CMAKE_SOURCE_DIR}/shaders/*.frag" "${CMAKE_SOURCE_DIR}/shaders/*.comp")
 
 foreach(SHADER ${SHADER_SOURCES})
     get_filename_component(SHADER_NAME ${SHADER} NAME)

@@ -1,0 +1,94 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 9, local_size_z = 1) in;
+
+struct Cluster {
+    vec4 minBounds;
+    vec4 maxBounds;
+};
+
+struct LightData {
+    vec4 posAndRadius;
+    vec4 colorAndIntensity;
+};
+
+struct ClusterLightInfo {
+    uint offset;
+    uint count;
+};
+
+layout(std430, binding = 0) readonly buffer ClusterBuffer {
+    Cluster clusters[];
+} clusterBuffer;
+
+layout(std430, binding = 1) readonly buffer LightBuffer {
+    LightData lights[];
+} lightBuffer;
+
+layout(std430, binding = 2) writeonly buffer ClusterLightInfoBuffer {
+    ClusterLightInfo info[];
+} clusterLightInfo;
+
+layout(std430, binding = 3) buffer LightIndexBuffer {
+    uint indices[];
+} lightIndexBuffer;
+
+layout(std430, binding = 4) buffer GlobalIndexCounter {
+    uint count;
+} globalCounter;
+
+layout(push_constant) uniform PushConstants {
+    mat4 view;      // to transform light positions from world space into view space
+    int gridX;
+    int gridY;
+    int gridZ;
+    int numLights;
+} pc;
+
+// Sphere-vs-AABB intersection test — the actual culling logic
+bool SphereIntersectsAABB(vec3 sphereCenter, float sphereRadius, vec3 aabbMin, vec3 aabbMax)
+{
+    vec3 closestPoint = clamp(sphereCenter, aabbMin, aabbMax);
+    float distSq = dot(closestPoint - sphereCenter, closestPoint - sphereCenter);
+    return distSq <= (sphereRadius * sphereRadius);
+}
+
+void main()
+{
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    uint z = gl_GlobalInvocationID.z;
+
+    if (x >= uint(pc.gridX) || y >= uint(pc.gridY) || z >= uint(pc.gridZ)) return;
+
+    uint clusterIndex = x + y * uint(pc.gridX) + z * uint(pc.gridX) * uint(pc.gridY);
+
+    vec3 aabbMin = clusterBuffer.clusters[clusterIndex].minBounds.xyz;
+    vec3 aabbMax = clusterBuffer.clusters[clusterIndex].maxBounds.xyz;
+
+    uint localIndices[64]; // temporary per-cluster scratch list, capped for safety
+    uint localCount = 0;
+
+    for (int i = 0; i < pc.numLights && localCount < 64; i++) {
+        vec3 lightPosWorld = lightBuffer.lights[i].posAndRadius.xyz;
+        float lightRadius = lightBuffer.lights[i].posAndRadius.w;
+
+        // Transform the light into view space, since our cluster bounds are in view space
+        vec3 lightPosView = (pc.view * vec4(lightPosWorld, 1.0)).xyz;
+
+        if (SphereIntersectsAABB(lightPosView, lightRadius, aabbMin, aabbMax)) {
+            localIndices[localCount] = uint(i);
+            localCount++;
+        }
+    }
+
+    // Atomically claim a chunk of the shared global index buffer for this cluster's results
+    uint startOffset = atomicAdd(globalCounter.count, localCount);
+
+    for (uint j = 0; j < localCount; j++) {
+        lightIndexBuffer.indices[startOffset + j] = localIndices[j];
+    }
+
+    clusterLightInfo.info[clusterIndex].offset = startOffset;
+    clusterLightInfo.info[clusterIndex].count = localCount;
+}

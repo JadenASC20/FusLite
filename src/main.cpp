@@ -7,6 +7,8 @@
 #include <Skybox.h>
 #include <ImGuiManager.h>
 #include <ShaderModule.h>
+#include <ComputeTest.h>
+#include <LightCuller.h>
 #include <Vertex.h>
 #include <Buffer.h>
 #include <UniformBufferObject.h>
@@ -17,6 +19,8 @@
 #include <chrono>
 #include <RenderParams.h>
 #include <glm/gtc/type_ptr.hpp>
+#include <ClusterBuilder.h>
+#include <ClusterConfig.h>
 
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -241,11 +245,21 @@ int main() {
         VulkanContext context;
         context.Init("FusLite", window);
 
-        Swapchain swapchain;
+        Swapchain swapchain;                
         swapchain.Init(context, WINDOW_WIDTH, WINDOW_HEIGHT);
 
         context.CreateQueue(swapchain.GetHandle(), static_cast<uint32_t>(swapchain.GetImages().size()));
 
+        ClusterBuilder clusterBuilder;
+        clusterBuilder.Init(context);
+
+        glm::mat4 testProj = glm::perspective(glm::radians(45.0f),
+            static_cast<float>(WINDOW_WIDTH) / static_cast<float>(WINDOW_HEIGHT), 0.1f, 1000.0f);
+        glm::mat4 invProj = glm::inverse(testProj);
+
+        clusterBuilder.BuildClusters(context, invProj,
+            static_cast<float>(WINDOW_WIDTH), static_cast<float>(WINDOW_HEIGHT), 0.1f, 1000.0f);
+         
         RenderPass renderPass;
         renderPass.Init(context, swapchain);
 
@@ -276,6 +290,23 @@ int main() {
         vkMapMemory(context.GetDevice(), lightBuffer.memory, 0, sizeof(GPULight) * MAX_LIGHTS, 0, &lightData);
         memcpy(lightData, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
         vkUnmapMemory(context.GetDevice(), lightBuffer.memory);
+
+        LightCuller lightCuller;
+        lightCuller.Init(context, clusterBuilder.GetClusterBuffer(), lightBuffer);
+        // lightCuller.CullLights(context, camera.GetViewMatrix(), MAX_LIGHTS);
+        glm::mat4 testView = glm::lookAt(glm::vec3(0.0f, 1.0f, 5.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+        lightCuller.CullLights(context, testView, MAX_LIGHTS);
+
+        void* infoData;
+        vkMapMemory(context.GetDevice(), lightCuller.GetClusterLightInfoBuffer().memory, 0,
+            sizeof(ClusterLightInfo) * NUM_CLUSTERS, 0, &infoData);
+        ClusterLightInfo* info = static_cast<ClusterLightInfo*>(infoData);
+
+        // Print counts for a spread of clusters to see the variation
+        for (int i = 0; i < NUM_CLUSTERS; i += NUM_CLUSTERS / 10) {
+            printf("Cluster[%d] light count: %u\n", i, info[i].count);
+        }
+        vkUnmapMemory(context.GetDevice(), lightCuller.GetClusterLightInfoBuffer().memory);
 
         Skybox skybox;
         skybox.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
@@ -430,6 +461,7 @@ int main() {
 
         context.Shutdown();
         context.FreeCommandBuffers(static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
+        clusterBuilder.Cleanup(context.GetDevice());
         model.Cleanup(context.GetDevice());
         skybox.Cleanup(context.GetDevice());
         imguiManager.Cleanup(context.GetDevice());
@@ -441,6 +473,7 @@ int main() {
         iblTextures.prefilteredSpecular.Destroy(context.GetDevice());
         iblTextures.brdfLUT.Destroy(context.GetDevice());
         lightBuffer.Destroy(context.GetDevice());
+        lightCuller.Cleanup(context.GetDevice());
         swapchain.Cleanup();
     }
     catch (const std::exception& e) {

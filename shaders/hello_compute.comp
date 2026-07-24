@@ -1,0 +1,12 @@
+#version 450
+
+layout(local_size_x = 1) in;
+
+layout(std430, binding = 0) writeonly buffer OutputBuffer {
+    float values[];
+} outputBuffer;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    outputBuffer.values[idx] = float(idx) * 2.0;
+}

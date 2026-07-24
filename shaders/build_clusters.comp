@@ -1,0 +1,72 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 9, local_size_z = 1) in;
+
+struct Cluster {
+    vec4 minBounds;
+    vec4 maxBounds;
+};
+
+layout(std430, binding = 0) writeonly buffer ClusterBuffer {
+    Cluster clusters[];
+} clusterBuffer;
+
+layout(push_constant) uniform PushConstants {
+    mat4 invProj;      // inverse projection, to unproject screen -> view space
+    vec2 screenSize;
+    float nearZ;
+    float farZ;
+    int gridX;
+    int gridY;
+    int gridZ;
+} pc;
+
+// Converts a screen-space point (in pixels) at a given view-space depth into a view-space position
+vec3 ScreenToView(vec2 screenPos, float viewZ)
+{
+    vec2 ndc = (screenPos / pc.screenSize) * 2.0 - 1.0;
+    vec4 clip = vec4(ndc, 0.0, 1.0);
+    vec4 view = pc.invProj * clip;
+    view /= view.w;
+    // Scale the unprojected direction out to the target depth
+    return view.xyz * (viewZ / view.z);
+}
+
+// Standard logarithmic depth slicing — gives finer resolution near the camera,
+// coarser resolution far away, matching how depth precision naturally behaves.
+float ClusterZToViewZ(int zSlice)
+{
+    float ratio = pc.farZ / pc.nearZ;
+    return pc.nearZ * pow(ratio, float(zSlice) / float(pc.gridZ));
+}
+
+void main()
+{
+    uint x = gl_GlobalInvocationID.x;
+    uint y = gl_GlobalInvocationID.y;
+    uint z = gl_GlobalInvocationID.z;
+
+    if (x >= uint(pc.gridX) || y >= uint(pc.gridY) || z >= uint(pc.gridZ)) return;
+
+    float tileSizeX = pc.screenSize.x / float(pc.gridX);
+    float tileSizeY = pc.screenSize.y / float(pc.gridY);
+
+    vec2 minScreen = vec2(x, y) * vec2(tileSizeX, tileSizeY);
+    vec2 maxScreen = vec2(x + 1, y + 1) * vec2(tileSizeX, tileSizeY);
+
+    float viewZNear = -ClusterZToViewZ(int(z));     // negative: view space looks down -Z
+    float viewZFar = -ClusterZToViewZ(int(z) + 1);
+
+    vec3 minNear = ScreenToView(minScreen, viewZNear);
+    vec3 maxNear = ScreenToView(maxScreen, viewZNear);
+    vec3 minFar = ScreenToView(minScreen, viewZFar);
+    vec3 maxFar = ScreenToView(maxScreen, viewZFar);
+
+    vec3 minBounds = min(min(minNear, maxNear), min(minFar, maxFar));
+    vec3 maxBounds = max(max(minNear, maxNear), max(minFar, maxFar));
+
+    uint clusterIndex = x + y * uint(pc.gridX) + z * uint(pc.gridX) * uint(pc.gridY);
+
+    clusterBuffer.clusters[clusterIndex].minBounds = vec4(minBounds, 0.0);
+    clusterBuffer.clusters[clusterIndex].maxBounds = vec4(maxBounds, 0.0);
+}
