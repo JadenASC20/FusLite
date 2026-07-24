@@ -15,6 +15,10 @@ layout(push_constant) uniform PushConstants {
     float clearcoatRoughness;
     float flakeStrength;
     float flakeScale;
+    vec4 clusterGridAndScreen;
+    vec2 screenSize;
+    float nearZ;
+    float farZ;
 } pc;
 
 layout(binding = 1) uniform sampler2D diffuseSampler;
@@ -31,6 +35,19 @@ struct LightData {
 layout(std430, binding = 6) readonly buffer LightBuffer {
     LightData lights[];
 } lightBuffer;
+
+struct ClusterLightInfo {
+    uint offset;
+    uint count;
+};
+
+layout(std430, binding = 7) readonly buffer ClusterLightInfoBuffer {
+    ClusterLightInfo info[];
+} clusterLightInfo;
+
+layout(std430, binding = 8) readonly buffer LightIndexBuffer {
+    uint indices[];
+} lightIndexBuffer;
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
@@ -184,11 +201,34 @@ void main() {
     vec3 sunColor = vec3(1.0, 0.98, 0.92) * pc.lightDirAndIntensity.w;
     ACCUMULATE_LIGHT(sunDir, sunColor)
 
-    for (int i = 0; i < MAX_LIGHTS; i++) {
-        vec3 lightPos = lightBuffer.lights[i].posAndRadius.xyz;
-        float lightRadius = lightBuffer.lights[i].posAndRadius.w;
-        vec3 lightColor = lightBuffer.lights[i].colorAndIntensity.rgb;
-        float lightIntensity = lightBuffer.lights[i].colorAndIntensity.a;
+    // Determine which cluster this fragment belongs to
+    ivec3 gridDims = ivec3(pc.clusterGridAndScreen.xyz);
+    vec2 tileSize = pc.screenSize / vec2(gridDims.xy);
+
+    ivec2 tileXY = ivec2(gl_FragCoord.xy / tileSize);
+    tileXY = clamp(tileXY, ivec2(0), gridDims.xy - 1);
+
+    // View-space depth of this fragment (positive distance from camera)
+    vec4 fragPosView = ubo.view * vec4(fragPosWorld, 1.0);
+    float viewDepth = -fragPosView.z;
+
+    float logRatio = pc.farZ / pc.nearZ;
+    int zSlice = int(log(viewDepth / pc.nearZ) / log(logRatio) * float(gridDims.z));
+    zSlice = clamp(zSlice, 0, gridDims.z - 1);
+
+    uint clusterIndex = uint(tileXY.x) + uint(tileXY.y) * uint(gridDims.x) +
+                         uint(zSlice) * uint(gridDims.x) * uint(gridDims.y);
+
+    uint lightOffset = clusterLightInfo.info[clusterIndex].offset;
+    uint lightCount = clusterLightInfo.info[clusterIndex].count;
+
+    for (uint li = 0; li < lightCount; li++) {
+        uint lightIdx = lightIndexBuffer.indices[lightOffset + li];
+
+        vec3 lightPos = lightBuffer.lights[lightIdx].posAndRadius.xyz;
+        float lightRadius = lightBuffer.lights[lightIdx].posAndRadius.w;
+        vec3 lightColor = lightBuffer.lights[lightIdx].colorAndIntensity.rgb;
+        float lightIntensity = lightBuffer.lights[lightIdx].colorAndIntensity.a;
 
         vec3 toLight = lightPos - fragPosWorld;
         float dist = length(toLight);

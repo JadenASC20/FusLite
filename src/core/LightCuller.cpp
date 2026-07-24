@@ -181,8 +181,6 @@ void LightCuller::CullLights(VulkanContext& context, const glm::mat4& view, int 
     vkQueueWaitIdle(graphicsQueue);
 
     vkFreeCommandBuffers(device, context.GetCommandPool(), 1, &cmd);
-
-    printf("Light culling complete.\n");
 }
 
 void LightCuller::Cleanup(VkDevice device)

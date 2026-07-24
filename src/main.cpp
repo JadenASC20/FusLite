@@ -293,20 +293,6 @@ int main() {
 
         LightCuller lightCuller;
         lightCuller.Init(context, clusterBuilder.GetClusterBuffer(), lightBuffer);
-        // lightCuller.CullLights(context, camera.GetViewMatrix(), MAX_LIGHTS);
-        glm::mat4 testView = glm::lookAt(glm::vec3(0.0f, 1.0f, 5.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-        lightCuller.CullLights(context, testView, MAX_LIGHTS);
-
-        void* infoData;
-        vkMapMemory(context.GetDevice(), lightCuller.GetClusterLightInfoBuffer().memory, 0,
-            sizeof(ClusterLightInfo) * NUM_CLUSTERS, 0, &infoData);
-        ClusterLightInfo* info = static_cast<ClusterLightInfo*>(infoData);
-
-        // Print counts for a spread of clusters to see the variation
-        for (int i = 0; i < NUM_CLUSTERS; i += NUM_CLUSTERS / 10) {
-            printf("Cluster[%d] light count: %u\n", i, info[i].count);
-        }
-        vkUnmapMemory(context.GetDevice(), lightCuller.GetClusterLightInfoBuffer().memory);
 
         Skybox skybox;
         skybox.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
@@ -323,8 +309,9 @@ int main() {
 
         vkDestroyShaderModule(context.GetDevice(), vertShader, nullptr);
         vkDestroyShaderModule(context.GetDevice(), fragShader, nullptr);
-
-        model.CreateDescriptorSets(pipeline, uniformBuffers, sizeof(UniformBufferObject), iblTextures, lightBuffer);
+        
+        model.CreateDescriptorSets(pipeline, uniformBuffers, sizeof(UniformBufferObject), iblTextures, lightBuffer,
+            lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer());
 
         VkShaderModule fullscreenVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
         VkShaderModule tonemapFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/tonemap.frag.spv");
@@ -359,6 +346,11 @@ int main() {
         static glm::mat4 modelMatrix = glm::mat4(1.0f); // move this OUTSIDE the if(g_showGui) block
         static RenderParams g_renderParams;
 
+        g_renderParams.clusterGridAndScreen = glm::vec4(CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, 0.0f);
+        g_renderParams.screenSize = glm::vec2(WINDOW_WIDTH, WINDOW_HEIGHT);
+        g_renderParams.nearZ = 0.1f;
+        g_renderParams.farZ = 1000.0f;
+
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
@@ -367,6 +359,14 @@ int main() {
             lastFrameTime = currentTime;
 
             camera.Update(deltaTime);
+
+            lightCuller.CullLights(context, camera.GetViewMatrix(), MAX_LIGHTS);
+
+            static int frameCount = 0;
+            frameCount++;
+            if (frameCount % 60 == 0) {
+                printf("Frame %d — light culling complete.\n", frameCount);
+            }
 
             uint32_t imageIndex = context.GetQueue()->AcquireNextImage();
 

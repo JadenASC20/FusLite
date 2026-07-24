@@ -26,7 +26,8 @@ public:
         const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
         const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture,
         const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
-        const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer);
+        const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
+        const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer);
 
     void PushParams(VkCommandBuffer commandBuffer, const RenderParams& params) const;
 

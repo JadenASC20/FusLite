@@ -52,21 +52,33 @@ void GraphicsPipeline::CreateDescriptorSetLayout()
     brdfLUTBinding.descriptorCount = 1;
     brdfLUTBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    // NEW: binding 6, the light SSBO
     VkDescriptorSetLayoutBinding lightBufferBinding{};
     lightBufferBinding.binding = 6;
     lightBufferBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     lightBufferBinding.descriptorCount = 1;
     lightBufferBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    VkDescriptorSetLayoutBinding clusterLightInfoBinding{};
+    clusterLightInfoBinding.binding = 7;
+    clusterLightInfoBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    clusterLightInfoBinding.descriptorCount = 1;
+    clusterLightInfoBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutBinding lightIndexBinding{};
+    lightIndexBinding.binding = 8;
+    lightIndexBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    lightIndexBinding.descriptorCount = 1;
+    lightIndexBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutBinding bindings[] = {
         uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding,
-        irradianceBinding, prefilteredBinding, brdfLUTBinding, lightBufferBinding
+        irradianceBinding, prefilteredBinding, brdfLUTBinding, lightBufferBinding,
+        clusterLightInfoBinding, lightIndexBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 7; // now genuinely matches the array size (7 entries)
+    layoutInfo.bindingCount = 9;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
@@ -81,8 +93,8 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
     poolSizes[0].descriptorCount = maxSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     poolSizes[1].descriptorCount = maxSets * 5;
-    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; // NEW
-    poolSizes[2].descriptorCount = maxSets;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    poolSizes[2].descriptorCount = maxSets * 3; // lightBuffer, clusterLightInfo, lightIndex — 3 storage buffers now
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -99,7 +111,8 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
     const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
     const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture,
     const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
-    const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer)
+    const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
+    const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer)
 {
     uint32_t numImages = static_cast<uint32_t>(uniformBuffers.size());
     std::vector<VkDescriptorSetLayout> layouts(numImages, m_descriptorSetLayout);
@@ -151,7 +164,17 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         lightBufferInfo.offset = 0;
         lightBufferInfo.range = VK_WHOLE_SIZE;
 
-        VkWriteDescriptorSet writes[7]{};
+        VkDescriptorBufferInfo clusterLightInfoInfo{};
+        clusterLightInfoInfo.buffer = clusterLightInfoBuffer.buffer;
+        clusterLightInfoInfo.offset = 0;
+        clusterLightInfoInfo.range = VK_WHOLE_SIZE;
+
+        VkDescriptorBufferInfo lightIndexInfo{};
+        lightIndexInfo.buffer = lightIndexBuffer.buffer;
+        lightIndexInfo.offset = 0;
+        lightIndexInfo.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet writes[9]{};
 
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = sets[i];
@@ -202,7 +225,21 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         writes[6].descriptorCount = 1;
         writes[6].pBufferInfo = &lightBufferInfo;
 
-        vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
+        writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[7].dstSet = sets[i];
+        writes[7].dstBinding = 7;
+        writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[7].descriptorCount = 1;
+        writes[7].pBufferInfo = &clusterLightInfoInfo;
+
+        writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[8].dstSet = sets[i];
+        writes[8].dstBinding = 8;
+        writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[8].descriptorCount = 1;
+        writes[8].pBufferInfo = &lightIndexInfo;
+
+        vkUpdateDescriptorSets(m_device, 9, writes, 0, nullptr);
     }
 
     return sets;
