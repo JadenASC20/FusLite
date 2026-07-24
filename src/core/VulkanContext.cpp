@@ -1511,3 +1511,9 @@ VulkanContext::IBLTextures VulkanContext::CreateIBLFromEquirect(const char* file
     return result;
 }
 
+BufferAndMemory VulkanContext::CreateStorageBuffer(VkDeviceSize size)
+{
+    return CreateBuffer(size,
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+}

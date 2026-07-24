@@ -52,14 +52,21 @@ void GraphicsPipeline::CreateDescriptorSetLayout()
     brdfLUTBinding.descriptorCount = 1;
     brdfLUTBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    // NEW: binding 6, the light SSBO
+    VkDescriptorSetLayoutBinding lightBufferBinding{};
+    lightBufferBinding.binding = 6;
+    lightBufferBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    lightBufferBinding.descriptorCount = 1;
+    lightBufferBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
     VkDescriptorSetLayoutBinding bindings[] = {
         uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding,
-        irradianceBinding, prefilteredBinding, brdfLUTBinding
+        irradianceBinding, prefilteredBinding, brdfLUTBinding, lightBufferBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 6;
+    layoutInfo.bindingCount = 7; // now genuinely matches the array size (7 entries)
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
@@ -69,15 +76,17 @@ void GraphicsPipeline::CreateDescriptorSetLayout()
 
 void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
 {
-    VkDescriptorPoolSize poolSizes[2]{};
+    VkDescriptorPoolSize poolSizes[3]{};
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = maxSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = maxSets * 5; // 5 samplers per set now (diffuse, mr, irradiance, prefiltered, brdfLUT)
+    poolSizes[1].descriptorCount = maxSets * 5;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; // NEW
+    poolSizes[2].descriptorCount = maxSets;
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 2;
+    poolInfo.poolSizeCount = 3;
     poolInfo.pPoolSizes = poolSizes;
     poolInfo.maxSets = maxSets;
 
@@ -89,7 +98,8 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
 std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
     const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
     const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture,
-    const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture, const VulkanTexture& brdfLUTTexture)
+    const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
+    const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer)
 {
     uint32_t numImages = static_cast<uint32_t>(uniformBuffers.size());
     std::vector<VkDescriptorSetLayout> layouts(numImages, m_descriptorSetLayout);
@@ -136,7 +146,13 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         brdfLUTInfo.imageView = brdfLUTTexture.view;
         brdfLUTInfo.sampler = brdfLUTTexture.sampler;
 
-        VkWriteDescriptorSet writes[6]{};
+        VkDescriptorBufferInfo lightBufferInfo{};
+        lightBufferInfo.buffer = lightBuffer.buffer;
+        lightBufferInfo.offset = 0;
+        lightBufferInfo.range = VK_WHOLE_SIZE;
+
+        VkWriteDescriptorSet writes[7]{};
+
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = sets[i];
         writes[0].dstBinding = 0;
@@ -179,7 +195,14 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         writes[5].descriptorCount = 1;
         writes[5].pImageInfo = &brdfLUTInfo;
 
-        vkUpdateDescriptorSets(m_device, 6, writes, 0, nullptr);
+        writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[6].dstSet = sets[i];
+        writes[6].dstBinding = 6;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[6].descriptorCount = 1;
+        writes[6].pBufferInfo = &lightBufferInfo;
+
+        vkUpdateDescriptorSets(m_device, 7, writes, 0, nullptr);
     }
 
     return sets;

@@ -219,5 +219,12 @@ void main() {
     vec3 ambient = kD_ibl * diffuseIBL + specularIBL;
     vec3 finalColor = ambient + outgoing;
 
+    // TEMP — synthetic cost measurement, no real effect on the image
+    vec3 dummyAccum = vec3(0.0);
+    for (int i = 0; i < 128; i++) {
+        dummyAccum += vec3(0.0001) * float(i);
+    }
+    finalColor += dummyAccum * 0.0; // zero contribution — keeps the compiler from optimizing the loop away
+
     outColor = vec4(finalColor, 1.0);
 }

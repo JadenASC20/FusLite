@@ -29,7 +29,7 @@ public:
     void LoadFromFile(VulkanContext& context, const std::string& path);
     void CreateDescriptorSets(GraphicsPipeline& pipeline,
         const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
-        const VulkanContext::IBLTextures& iblTextures);
+        const VulkanContext::IBLTextures& iblTextures, const BufferAndMemory& lightBuffer);
     void Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex) const;
     void Cleanup(VkDevice device);
 

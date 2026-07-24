@@ -257,6 +257,18 @@ int main() {
             ubo = context.CreateUniformBuffer(sizeof(UniformBufferObject));
         }
 
+        BufferAndMemory lightBuffer = context.CreateStorageBuffer(sizeof(GPULight) * MAX_LIGHTS);
+
+        std::vector<GPULight> lights(MAX_LIGHTS);
+        for (int i = 0; i < MAX_LIGHTS; i++) {
+            lights[i].posAndRadius = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            lights[i].colorAndIntensity = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        }
+        void* lightData;
+        vkMapMemory(context.GetDevice(), lightBuffer.memory, 0, sizeof(GPULight) * MAX_LIGHTS, 0, &lightData);
+        memcpy(lightData, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
+        vkUnmapMemory(context.GetDevice(), lightBuffer.memory);
+
         Skybox skybox;
         skybox.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
             "assets/Skybox.hdr", static_cast<uint32_t>(uniformBuffers.size()));
@@ -273,7 +285,7 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), vertShader, nullptr);
         vkDestroyShaderModule(context.GetDevice(), fragShader, nullptr);
 
-        model.CreateDescriptorSets(pipeline, uniformBuffers, sizeof(UniformBufferObject), iblTextures);
+        model.CreateDescriptorSets(pipeline, uniformBuffers, sizeof(UniformBufferObject), iblTextures, lightBuffer);
 
         VkShaderModule fullscreenVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
         VkShaderModule tonemapFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/tonemap.frag.spv");
@@ -324,12 +336,6 @@ int main() {
             ubo.view = camera.GetViewMatrix();
             ubo.proj = camera.GetProjectionMatrix();
             ubo.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
-
-            for (int i = 0; i < MAX_LIGHTS; i++) {
-                ubo.lightPosAndRadius[i] = glm::vec4(g_lightPositions[i], g_lightRadii[i]);
-                ubo.lightColorAndIntensity[i] = glm::vec4(g_lightColors[i], g_lightIntensities[i]);
-            }
-            ubo.numLightsPacked = glm::vec4(static_cast<float>(g_numActiveLights), 0, 0, 0);
 
             void* data;
             vkMapMemory(context.GetDevice(), uniformBuffers[imageIndex].memory, 0, sizeof(ubo), 0, &data);
@@ -426,6 +432,7 @@ int main() {
         iblTextures.irradiance.Destroy(context.GetDevice());
         iblTextures.prefilteredSpecular.Destroy(context.GetDevice());
         iblTextures.brdfLUT.Destroy(context.GetDevice());
+        lightBuffer.Destroy(context.GetDevice());
         swapchain.Cleanup();
     }
     catch (const std::exception& e) {

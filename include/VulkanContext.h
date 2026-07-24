@@ -64,6 +64,7 @@ public:
     BufferAndMemory CreateVertexBuffer(const void* data, VkDeviceSize size);
     BufferAndMemory CreateUniformBuffer(VkDeviceSize size);
     BufferAndMemory CreateIndexBuffer(const void* data, VkDeviceSize size);
+    BufferAndMemory CreateStorageBuffer(VkDeviceSize size);
 
     VulkanTexture CreateTexture(const char* filename);
     VkFormat FindDepthFormat();

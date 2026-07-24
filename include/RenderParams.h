@@ -1,8 +1,6 @@
 #pragma once
 #include <glm/glm.hpp>
 
-// Pushed to the GPU every frame via vkCmdPushConstants — lets ImGui sliders
-// tune shader behavior live, with zero rebuild/redeploy needed.
 
 struct RenderParams
 {
@@ -11,4 +9,12 @@ struct RenderParams
     float clearcoatRoughness = 0.03f;
     float flakeStrength = 0.12f;
     float flakeScale = 400.0f;
+};
+
+constexpr int MAX_LIGHTS = 128;
+
+struct GPULight
+{
+    glm::vec4 posAndRadius;
+    glm::vec4 colorAndIntensity;
 };
