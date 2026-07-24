@@ -24,6 +24,15 @@ layout(binding = 3) uniform samplerCube irradianceMap;
 layout(binding = 4) uniform samplerCube prefilteredMap;
 layout(binding = 5) uniform sampler2D brdfLUT;
 
+struct LightData {
+    vec4 posAndRadius;
+    vec4 colorAndIntensity;
+};
+
+layout(std430, binding = 6) readonly buffer LightBuffer {
+    LightData lights[];
+} lightBuffer;
+
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragNormalWorld;
@@ -224,7 +233,11 @@ void main() {
     for (int i = 0; i < 128; i++) {
         dummyAccum += vec3(0.0001) * float(i);
     }
-    finalColor += dummyAccum * 0.0; // zero contribution — keeps the compiler from optimizing the loop away
+    
+    // CHECKPOINT 4: read from the SSBO but discard the result — proves the
+    // binding/layout matches the C++ side without affecting the visible output.
+    vec3 debugLightRead = lightBuffer.lights[0].colorAndIntensity.rgb;
+    finalColor += debugLightRead * 0.0;
 
     outColor = vec4(finalColor, 1.0);
 }
