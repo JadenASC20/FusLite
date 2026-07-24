@@ -1,13 +1,12 @@
 #version 450
 
+#define MAX_LIGHTS 128
+
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
     vec4 cameraPos;
-    vec4 lightPosAndRadius[4];
-    vec4 lightColorAndIntensity[4];
-    vec4 numLightsPacked;
 } ubo;
 
 layout(push_constant) uniform PushConstants {
@@ -167,7 +166,6 @@ void main() {
     vec3 totalLight = vec3(0.0);
     vec3 totalClearcoat = vec3(0.0);
 
-    // Helper inline: accumulate both base PBR and clearcoat for one light direction/radiance
     #define ACCUMULATE_LIGHT(L, radiance) \
     { \
         totalLight += EvaluateDirectLight(N, V, L, radiance, albedo, roughness, metallic); \
@@ -186,32 +184,29 @@ void main() {
     vec3 sunColor = vec3(1.0, 0.98, 0.92) * pc.lightDirAndIntensity.w;
     ACCUMULATE_LIGHT(sunDir, sunColor)
 
-    // Point lights
-    int numLights = int(ubo.numLightsPacked.x);
-    for (int i = 0; i < numLights; i++) {
-        vec3 lightPos = ubo.lightPosAndRadius[i].xyz;
-        float lightRadius = ubo.lightPosAndRadius[i].w;
-        vec3 lightColor = ubo.lightColorAndIntensity[i].rgb;
-        float lightIntensity = ubo.lightColorAndIntensity[i].a;
+    for (int i = 0; i < MAX_LIGHTS; i++) {
+        vec3 lightPos = lightBuffer.lights[i].posAndRadius.xyz;
+        float lightRadius = lightBuffer.lights[i].posAndRadius.w;
+        vec3 lightColor = lightBuffer.lights[i].colorAndIntensity.rgb;
+        float lightIntensity = lightBuffer.lights[i].colorAndIntensity.a;
 
         vec3 toLight = lightPos - fragPosWorld;
         float dist = length(toLight);
-        vec3 L = toLight / max(dist, 0.0001);
+        vec3 pointL = toLight / max(dist, 0.0001);
 
         float attenuation = clamp(1.0 - (dist / lightRadius), 0.0, 1.0);
         attenuation *= attenuation;
-        vec3 radiance = lightColor * lightIntensity * attenuation;
+        vec3 pointRadiance = lightColor * lightIntensity * attenuation;
 
-        ACCUMULATE_LIGHT(L, radiance)
+        ACCUMULATE_LIGHT(pointL, pointRadiance)
     }
 
     vec3 baseLayer = totalLight;
 
-    // Average Fresnel across accumulated clearcoat contributions for the base-layer attenuation term
-    float avgFc = clamp(clearcoatFactor * 0.5, 0.0, 1.0); // simple approximation — see note below
+    float avgFc = clamp(clearcoatFactor * 0.5, 0.0, 1.0);
     vec3 outgoing = baseLayer * (1.0 - avgFc) + totalClearcoat;
 
-    // --- IBL ambient (unchanged) ---
+    // --- IBL ambient ---
     vec3 R = reflect(-V, N);
     const float MAX_REFLECTION_LOD = 4.0;
 
@@ -227,17 +222,6 @@ void main() {
 
     vec3 ambient = kD_ibl * diffuseIBL + specularIBL;
     vec3 finalColor = ambient + outgoing;
-
-    // TEMP — synthetic cost measurement, no real effect on the image
-    vec3 dummyAccum = vec3(0.0);
-    for (int i = 0; i < 128; i++) {
-        dummyAccum += vec3(0.0001) * float(i);
-    }
-    
-    // CHECKPOINT 4: read from the SSBO but discard the result — proves the
-    // binding/layout matches the C++ side without affecting the visible output.
-    vec3 debugLightRead = lightBuffer.lights[0].colorAndIntensity.rgb;
-    finalColor += debugLightRead * 0.0;
 
     outColor = vec4(finalColor, 1.0);
 }

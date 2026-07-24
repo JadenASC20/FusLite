@@ -261,9 +261,17 @@ int main() {
 
         std::vector<GPULight> lights(MAX_LIGHTS);
         for (int i = 0; i < MAX_LIGHTS; i++) {
-            lights[i].posAndRadius = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-            lights[i].colorAndIntensity = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+            float angle = (float(i) / MAX_LIGHTS) * 6.2831f * 3.0f; // a few spiral loops around the car
+            float radius = 2.0f + (i % 10) * 0.6f;
+            float height = -1.0f + (i % 7) * 0.8f;
+            lights[i].posAndRadius = glm::vec4(cosf(angle) * radius, height, sinf(angle) * radius, 3.0f);
+            lights[i].colorAndIntensity = glm::vec4(
+                0.5f + 0.5f * sinf(i * 1.3f),
+                0.5f + 0.5f * sinf(i * 2.1f),
+                0.5f + 0.5f * sinf(i * 0.7f),
+                4.0f);
         }
+
         void* lightData;
         vkMapMemory(context.GetDevice(), lightBuffer.memory, 0, sizeof(GPULight) * MAX_LIGHTS, 0, &lightData);
         memcpy(lightData, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
