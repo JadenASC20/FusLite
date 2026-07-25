@@ -4,7 +4,8 @@
 struct RenderParams
 {
     glm::vec4 lightDirAndIntensity = { -0.5f, 1.0f, -0.3f, 3.0f };
-    glm::vec4 sunColor = { 1.0f, 1.0f, 1.0f, 0.0f }; // rgb = color, w unused
+    glm::vec4 sunColor = { 1.0f, 1.0f, 1.0f, 0.0f };
+    glm::vec4 colorTint = { 1.0f, 1.0f, 1.0f, 0.0f };
     float clearcoatFactor = 0.8f;
     float clearcoatRoughness = 0.03f;
     float flakeStrength = 0.12f;
@@ -14,6 +15,7 @@ struct RenderParams
     float nearZ = 0.1f;
     float farZ = 1000.0f;
 };
+
 constexpr int MAX_LIGHTS = 128;
 
 struct GPULight

@@ -12,6 +12,7 @@ layout(binding = 0) uniform UniformBufferObject {
 layout(push_constant) uniform PushConstants {
     vec4 lightDirAndIntensity;
     vec4 sunColor;
+    vec4 colorTint;
     float clearcoatFactor;
     float clearcoatRoughness;
     float flakeStrength;
@@ -162,6 +163,7 @@ vec3 ApplyFlakeNormal(vec3 N, vec3 tangent, vec3 bitangent, vec2 uv, float flake
 
 void main() {
     vec3 albedo = texture(diffuseSampler, fragTexCoord).rgb;
+    albedo *= pc.colorTint.rgb;
     vec2 mr = texture(metallicRoughnessSampler, fragTexCoord).gb;
     float roughness = clamp(mr.x, 0.05, 1.0);
     float metallic = mr.y;

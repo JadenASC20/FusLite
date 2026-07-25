@@ -6,14 +6,11 @@ struct SceneObject
 {
     std::string name;
     glm::mat4 transform = glm::mat4(1.0f);
-
-    // Material tuning — same fields as existing RenderParams, now per-object
+    glm::vec3 colorTint = glm::vec3(1.0f);
     float clearcoatFactor = 0.8f;
     float clearcoatRoughness = 0.03f;
     float flakeStrength = 0.12f;
     float flakeScale = 400.0f;
-
-    // Later: pointer/index to which Model/mesh this object actually draws
 };
 
 struct SceneLight

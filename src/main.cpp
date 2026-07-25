@@ -95,8 +95,9 @@ void TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout
 
 void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swapchain,
     const RenderPass& renderResources, const GraphicsPipeline& pipeline, const TonemapPipeline& tonemapPipeline,
-    const Skybox& skybox, const Model& model, ImGuiManager& imguiManager, bool showGui,
-    const RenderParams& params)
+    const Skybox& skybox, const std::vector<Model>& showcaseSpheres,
+    const std::vector<SceneObject>& sceneObjects,
+    ImGuiManager& imguiManager, bool showGui, RenderParams params)
 {
     VkExtent2D extent = swapchain.GetExtent();
     VkImage colorImage = swapchain.GetImages()[imageIndex];
@@ -153,7 +154,18 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
 
     pipeline.Bind(cmd);
     pipeline.PushParams(cmd, params);
-    model.Draw(cmd, pipeline.GetLayout(), imageIndex);
+
+    // Showcase spheres
+    for (size_t i = 0; i < showcaseSpheres.size(); i++) {
+        const SceneObject& obj = sceneObjects[i];
+        params.colorTint = glm::vec4(obj.colorTint, 0.0f);
+        params.clearcoatFactor = obj.clearcoatFactor;
+        params.clearcoatRoughness = obj.clearcoatRoughness;
+        params.flakeStrength = obj.flakeStrength;
+        params.flakeScale = obj.flakeScale;
+        pipeline.PushParams(cmd, params);
+        showcaseSpheres[i].Draw(cmd, pipeline.GetLayout(), imageIndex);
+    }
 
     vkCmdEndRendering(cmd);
 
@@ -260,13 +272,7 @@ int main() {
         RenderPass renderPass;
         renderPass.Init(context, swapchain);
 
-        Model model;
-        model.LoadFromFile(context, "assets/carTEST1_2.glb");
-
         std::vector<BufferAndMemory> uniformBuffers(swapchain.GetImages().size());
-        for (auto& ubo : uniformBuffers) {
-            ubo = context.CreateUniformBuffer(sizeof(UniformBufferObject));
-        }
 
         BufferAndMemory lightBuffer = context.CreateStorageBuffer(sizeof(GPULight) * MAX_LIGHTS);
 
@@ -289,8 +295,21 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), vertShader, nullptr);
         vkDestroyShaderModule(context.GetDevice(), fragShader, nullptr);
         
-        model.CreateDescriptorSets(pipeline, uniformBuffers, sizeof(UniformBufferObject), iblTextures, lightBuffer,
-            lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer());
+        constexpr int NUM_SHOWCASE_SPHERES = 5;
+        std::vector<Model> showcaseSpheres(NUM_SHOWCASE_SPHERES);
+        std::vector<std::vector<BufferAndMemory>> showcaseUniformBuffers(NUM_SHOWCASE_SPHERES);
+
+        for (int i = 0; i < NUM_SHOWCASE_SPHERES; i++) {
+            showcaseSpheres[i].LoadFromFile(context, "assets/ShaderBall.obj");
+
+            showcaseUniformBuffers[i].resize(swapchain.GetImages().size());
+            for (auto& ubo : showcaseUniformBuffers[i]) {
+                ubo = context.CreateUniformBuffer(sizeof(UniformBufferObject));
+            }
+
+            showcaseSpheres[i].CreateDescriptorSets(pipeline, showcaseUniformBuffers[i], sizeof(UniformBufferObject),
+                iblTextures, lightBuffer, lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer());
+        }
 
         VkShaderModule fullscreenVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
         VkShaderModule tonemapFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/tonemap.frag.spv");
@@ -332,7 +351,16 @@ int main() {
         g_renderParams.nearZ = 0.1f;
         g_renderParams.farZ = 1000.0f;
 
-        g_sceneObjects.push_back({ "Car" }); // transform defaults to identity, matches your current car placement
+        float spacing = 2.5f;
+        for (int i = 0; i < NUM_SHOWCASE_SPHERES; i++) {
+            SceneObject sphere;
+            sphere.name = "pSphere" + std::string(1, 'A' + i);
+            sphere.transform = glm::translate(glm::mat4(1.0f), glm::vec3((i - 2) * spacing, 0.0f, 0.0f));
+            sphere.colorTint = glm::vec3(0.7f, 0.1f, 0.1f);
+            sphere.clearcoatFactor = 0.2f + i * 0.15f;
+            sphere.flakeStrength = 0.02f + i * 0.03f;
+            g_sceneObjects.push_back(sphere);
+        }
 
         g_sceneLights.push_back({ "fPointLightA", { 2.0f, 1.5f, 2.0f }, { 1.0f, 0.0f, 0.0f }, 8.0f, 5.0f });
         g_sceneLights.push_back({ "fPointLightB", { -2.0f, 1.5f, 2.0f }, { 0.0f, 0.0f, 1.0f }, 8.0f, 5.0f });
@@ -376,16 +404,18 @@ int main() {
 
             uint32_t imageIndex = context.GetQueue()->AcquireNextImage();
 
-            UniformBufferObject ubo{};
-            ubo.model = g_sceneObjects[0].transform;
-            ubo.view = camera.GetViewMatrix();
-            ubo.proj = camera.GetProjectionMatrix();
-            ubo.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
+            for (size_t i = 0; i < g_sceneObjects.size(); i++) {
+                UniformBufferObject objUbo{};
+                objUbo.model = g_sceneObjects[i].transform;
+                objUbo.view = camera.GetViewMatrix();
+                objUbo.proj = camera.GetProjectionMatrix();
+                objUbo.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
 
-            void* data;
-            vkMapMemory(context.GetDevice(), uniformBuffers[imageIndex].memory, 0, sizeof(ubo), 0, &data);
-            memcpy(data, &ubo, sizeof(ubo));
-            vkUnmapMemory(context.GetDevice(), uniformBuffers[imageIndex].memory);
+                void* objData;
+                vkMapMemory(context.GetDevice(), showcaseUniformBuffers[i][imageIndex].memory, 0, sizeof(objUbo), 0, &objData);
+                memcpy(objData, &objUbo, sizeof(objUbo));
+                vkUnmapMemory(context.GetDevice(), showcaseUniformBuffers[i][imageIndex].memory);
+            }
 
             glm::mat4 vpNoTranslate = camera.GetProjectionMatrix() * camera.GetViewMatrixNoTranslate();
             skybox.Update(imageIndex, vpNoTranslate);
@@ -461,6 +491,7 @@ int main() {
                         SceneObject& obj = g_sceneObjects[g_selectedIndex];
                         ImGui::Text("Object: %s", obj.name.c_str());
                         ImGui::Separator();
+                        ImGui::ColorEdit3("Color", &obj.colorTint.x);
                         ImGui::SliderFloat("Clearcoat Factor", &obj.clearcoatFactor, 0.0f, 1.0f);
                         ImGui::SliderFloat("Clearcoat Roughness", &obj.clearcoatRoughness, 0.01f, 0.5f);
                         ImGui::SliderFloat("Flake Strength", &obj.flakeStrength, 0.0f, 0.3f);
@@ -511,7 +542,8 @@ int main() {
             }
             
             RecordFrame(commandBuffers[imageIndex], imageIndex, swapchain, renderPass,
-                pipeline, tonemapPipeline, skybox, model, imguiManager, g_showGui, g_renderParams);
+                pipeline, tonemapPipeline, skybox, showcaseSpheres, g_sceneObjects,
+                imguiManager, g_showGui, g_renderParams);
 
             context.GetQueue()->SubmitAsync(commandBuffers[imageIndex], imageIndex);
             context.GetQueue()->Present(imageIndex);
@@ -522,10 +554,12 @@ int main() {
         context.Shutdown();
         context.FreeCommandBuffers(static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
         clusterBuilder.Cleanup(context.GetDevice());
-        model.Cleanup(context.GetDevice());
         skybox.Cleanup(context.GetDevice());
         imguiManager.Cleanup(context.GetDevice());
-        for (auto& ubo : uniformBuffers) { ubo.Destroy(context.GetDevice()); }
+        for (auto& sphere : showcaseSpheres) sphere.Cleanup(context.GetDevice());
+        for (auto& ubos : showcaseUniformBuffers) {
+            for (auto& ubo : ubos) ubo.Destroy(context.GetDevice());
+        }
         tonemapPipeline.Cleanup();
         pipeline.Cleanup();
         renderPass.Cleanup();

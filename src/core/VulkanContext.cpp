@@ -1327,7 +1327,7 @@ VulkanTexture VulkanContext::CreateIrradianceCubemap(const float* equirectPixels
 
     std::vector<float> faceData(static_cast<size_t>(faceSize) * faceSize * 6 * 4);
     const float PI = 3.14159265359f;
-    const float sampleDelta = 0.1f; // coarse step — irradiance is very low-frequency, this is plenty
+    const float sampleDelta = 0.025f; // coarse step — irradiance is very low-frequency, this is plenty
 
     for (int face = 0; face < 6; face++) {
         for (uint32_t y = 0; y < faceSize; y++) {
