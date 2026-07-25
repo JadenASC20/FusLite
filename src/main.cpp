@@ -21,6 +21,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <ClusterBuilder.h>
 #include <ClusterConfig.h>
+#include <SceneTypes.h>
+#include <ColorTemperature.h>
 
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -36,24 +38,19 @@
 #include <stdexcept>
 #include <vector>
 
+enum class SelectionType { None, Object, Light };
+
+static std::vector<SceneObject> g_sceneObjects;
+static std::vector<SceneLight> g_sceneLights;
+static SelectionType g_selectionType = SelectionType::None;
+static int g_selectedIndex = -1;
+
+static float g_sunKelvin = 5500.0f;
+static glm::vec3 g_sunDirection = { -0.5f, 1.0f, -0.3f };
+static float g_sunIntensity = 3.0f;
+
 static Camera* g_camera = nullptr;
 static bool g_showGui = true;
-
-static glm::vec3 g_lightPositions[MAX_LIGHTS] = {
-    { 2.0f, 1.5f, 2.0f },
-    { -2.0f, 1.5f, 2.0f },
-    { 0.0f, 2.5f, -2.0f },
-    { 0.0f, 0.5f, 3.0f }
-};
-static glm::vec3 g_lightColors[MAX_LIGHTS] = {
-    { 1.0f, 0.3f, 0.3f },
-    { 0.3f, 0.3f, 1.0f },
-    { 0.3f, 1.0f, 0.3f },
-    { 1.0f, 1.0f, 1.0f }
-};
-static float g_lightIntensities[MAX_LIGHTS] = { 5.0f, 5.0f, 5.0f, 5.0f };
-static float g_lightRadii[MAX_LIGHTS] = { 5.0f, 5.0f, 5.0f, 5.0f };
-static int g_numActiveLights = 2;
 
 void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
@@ -273,24 +270,6 @@ int main() {
 
         BufferAndMemory lightBuffer = context.CreateStorageBuffer(sizeof(GPULight) * MAX_LIGHTS);
 
-        std::vector<GPULight> lights(MAX_LIGHTS);
-        for (int i = 0; i < MAX_LIGHTS; i++) {
-            float angle = (float(i) / MAX_LIGHTS) * 6.2831f * 3.0f; // a few spiral loops around the car
-            float radius = 2.0f + (i % 10) * 0.6f;
-            float height = -1.0f + (i % 7) * 0.8f;
-            lights[i].posAndRadius = glm::vec4(cosf(angle) * radius, height, sinf(angle) * radius, 3.0f);
-            lights[i].colorAndIntensity = glm::vec4(
-                0.5f + 0.5f * sinf(i * 1.3f),
-                0.5f + 0.5f * sinf(i * 2.1f),
-                0.5f + 0.5f * sinf(i * 0.7f),
-                4.0f);
-        }
-
-        void* lightData;
-        vkMapMemory(context.GetDevice(), lightBuffer.memory, 0, sizeof(GPULight) * MAX_LIGHTS, 0, &lightData);
-        memcpy(lightData, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
-        vkUnmapMemory(context.GetDevice(), lightBuffer.memory);
-
         LightCuller lightCuller;
         lightCuller.Init(context, clusterBuilder.GetClusterBuffer(), lightBuffer);
 
@@ -326,6 +305,8 @@ int main() {
         ImGuiManager imguiManager;
         imguiManager.Init(context, window, swapchain.GetImageFormat(),
             static_cast<uint32_t>(swapchain.GetImages().size()));
+        ImGuiIO& io = ImGui::GetIO();
+        io.FontGlobalScale = 1.5f;
 
         std::vector<VkCommandBuffer> commandBuffers(swapchain.GetImageViews().size());
         context.CreateCommandBuffers(static_cast<uint32_t>(commandBuffers.size()), commandBuffers.data());
@@ -351,6 +332,13 @@ int main() {
         g_renderParams.nearZ = 0.1f;
         g_renderParams.farZ = 1000.0f;
 
+        g_sceneObjects.push_back({ "Car" }); // transform defaults to identity, matches your current car placement
+
+        g_sceneLights.push_back({ "fPointLightA", { 2.0f, 1.5f, 2.0f }, { 1.0f, 0.0f, 0.0f }, 8.0f, 5.0f });
+        g_sceneLights.push_back({ "fPointLightB", { -2.0f, 1.5f, 2.0f }, { 0.0f, 0.0f, 1.0f }, 8.0f, 5.0f });
+        g_sceneLights.push_back({ "fPointLightC", { 0.0f, 2.5f, -2.0f }, { 0.0f, 1.0f, 0.0f }, 8.0f, 5.0f });
+
+
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();
 
@@ -362,16 +350,34 @@ int main() {
 
             lightCuller.CullLights(context, camera.GetViewMatrix(), MAX_LIGHTS);
 
-            static int frameCount = 0;
-            frameCount++;
-            if (frameCount % 60 == 0) {
-                printf("Frame %d — light culling complete.\n", frameCount);
+            // static int frameCount = 0;
+            // frameCount++;
+            // if (frameCount % 60 == 0) {
+            //      printf("Frame %d — light culling complete.\n", frameCount);
+            // }
+
+            std::vector<GPULight> lights(MAX_LIGHTS);
+            for (int i = 0; i < MAX_LIGHTS; i++) {
+                if (i < static_cast<int>(g_sceneLights.size())) {
+                    const SceneLight& light = g_sceneLights[i];
+                    lights[i].posAndRadius = glm::vec4(light.position, light.radius);
+                    lights[i].colorAndIntensity = glm::vec4(light.color, light.intensity);
+                }
+                else {
+                    lights[i].posAndRadius = glm::vec4(0.0f, 0.0f, 0.0f, 0.001f); // tiny radius, effectively inert
+                    lights[i].colorAndIntensity = glm::vec4(0.0f); // zero intensity — contributes nothing
+                }
             }
+
+            void* lightData;
+            vkMapMemory(context.GetDevice(), lightBuffer.memory, 0, sizeof(GPULight) * MAX_LIGHTS, 0, &lightData);
+            memcpy(lightData, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
+            vkUnmapMemory(context.GetDevice(), lightBuffer.memory);
 
             uint32_t imageIndex = context.GetQueue()->AcquireNextImage();
 
             UniformBufferObject ubo{};
-            ubo.model = modelMatrix;
+            ubo.model = g_sceneObjects[0].transform;
             ubo.view = camera.GetViewMatrix();
             ubo.proj = camera.GetProjectionMatrix();
             ubo.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
@@ -390,6 +396,16 @@ int main() {
                 0.1f, 1000.0f
             );
 
+            g_renderParams.lightDirAndIntensity = glm::vec4(g_sunDirection, g_sunIntensity);
+            g_renderParams.sunColor = glm::vec4(KelvinToRGB(g_sunKelvin), 0.0f);
+
+            if (!g_sceneObjects.empty()) {
+                g_renderParams.clearcoatFactor = g_sceneObjects[0].clearcoatFactor;
+                g_renderParams.clearcoatRoughness = g_sceneObjects[0].clearcoatRoughness;
+                g_renderParams.flakeStrength = g_sceneObjects[0].flakeStrength;
+                g_renderParams.flakeScale = g_sceneObjects[0].flakeScale;
+            }
+
             if (g_showGui) {
                 imguiManager.BeginFrame();
 
@@ -399,57 +415,101 @@ int main() {
 
                 glm::mat4 view = camera.GetViewMatrix();
 
-                ImGuizmo::Manipulate(
-                    glm::value_ptr(view),
-                    glm::value_ptr(gizmoProj),
-                    ImGuizmo::TRANSLATE,
-                    ImGuizmo::WORLD,
-                    glm::value_ptr(modelMatrix)
-                );
-
-                ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-                ImGuiIO& io = ImGui::GetIO();
-                ImGui::Text("Frame time: %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-                ImGui::Text("Press SPACE to toggle this window");
-
-                ImGui::Separator();
-                ImGui::Text("Material Tuning");
-                ImGui::SliderFloat("Clearcoat Factor", &g_renderParams.clearcoatFactor, 0.0f, 1.0f);
-                ImGui::SliderFloat("Clearcoat Roughness", &g_renderParams.clearcoatRoughness, 0.01f, 0.5f);
-                ImGui::SliderFloat("Flake Strength", &g_renderParams.flakeStrength, 0.0f, 0.3f);
-                ImGui::SliderFloat("Flake Scale", &g_renderParams.flakeScale, 50.0f, 1000.0f);
-
-                ImGui::Separator();
-                ImGui::Text("Lighting");
-                ImGui::SliderFloat3("Light Direction", &g_renderParams.lightDirAndIntensity.x, -1.0f, 1.0f);
-                ImGui::SliderFloat("Light Intensity", &g_renderParams.lightDirAndIntensity.w, 0.0f, 10.0f);
-
-                ImGui::Separator();
-                ImGui::Text("Point Lights");
-                ImGui::SliderInt("Active Lights", &g_numActiveLights, 0, MAX_LIGHTS);
-                for (int i = 0; i < g_numActiveLights; i++) {
-                    ImGui::PushID(i);
-                    ImGui::Text("Light %d", i);
-                    ImGui::SliderFloat3("Position", &g_lightPositions[i].x, -5.0f, 5.0f);
-                    ImGui::ColorEdit3("Color", &g_lightColors[i].x);
-                    ImGui::SliderFloat("Intensity", &g_lightIntensities[i], 0.0f, 20.0f);
-                    ImGui::SliderFloat("Radius", &g_lightRadii[i], 0.5f, 20.0f);
-                    ImGui::PopID();
+                if (g_selectionType == SelectionType::Object && g_selectedIndex >= 0 && g_selectedIndex < static_cast<int>(g_sceneObjects.size())) {
+                    ImGuizmo::Manipulate(
+                        glm::value_ptr(view),
+                        glm::value_ptr(gizmoProj),
+                        ImGuizmo::TRANSLATE,
+                        ImGuizmo::WORLD,
+                        glm::value_ptr(g_sceneObjects[g_selectedIndex].transform)
+                    );
                 }
 
-                ImGui::Separator();
-                static float frameTimes[90] = {};
-                static int frameTimeOffset = 0;
-                frameTimes[frameTimeOffset] = deltaTime * 1000.0f;
-                frameTimeOffset = (frameTimeOffset + 1) % IM_ARRAYSIZE(frameTimes);
-                ImGui::PlotLines("Frame Time (ms)", frameTimes, IM_ARRAYSIZE(frameTimes), frameTimeOffset,
-                    nullptr, 0.0f, 33.0f, ImVec2(0, 60));
+                // --- Window 1: Debug ---
+                ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
+                ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                {
+                    ImGui::Text("Frame Time: %.2fms/frame (%.0f FPS)", 1000.0f / io.Framerate, io.Framerate);
 
+                    static float frameTimes[90] = {};
+                    static int frameTimeOffset = 0;
+                    frameTimes[frameTimeOffset] = deltaTime * 1000.0f;
+                    frameTimeOffset = (frameTimeOffset + 1) % IM_ARRAYSIZE(frameTimes);
+                    ImGui::PlotLines("Frame Time Graph", frameTimes, IM_ARRAYSIZE(frameTimes), frameTimeOffset,
+                        nullptr, 0.0f, 33.0f, ImVec2(0, 60));
+
+                    ImGui::Separator();
+                    ImGui::Text("Lighting (Sun)");
+                    ImGui::SliderFloat3("Light Dir", &g_sunDirection.x, -1.0f, 1.0f);
+                    ImGui::SliderFloat("Light Intensity", &g_sunIntensity, 0.0f, 10.0f);
+                    
+                    glm::vec3 previewColor = KelvinToRGB(g_sunKelvin);
+                    ImGui::ColorButton("##sunPreview", ImVec4(previewColor.r, previewColor.g, previewColor.b, 1.0f),
+                        0, ImVec2(40, 25));
+                    ImGui::SameLine();
+                    ImGui::SliderFloat("Light Color (K)", &g_sunKelvin, 1000.0f, 12000.0f, "%.0f K");
+                }
+                ImGui::End();
+
+                // --- Window 2: Property Window ---
+                ImGui::SetNextWindowPos(ImVec2(20, 420), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
+                ImGui::Begin("Property Window", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                {
+                    if (g_selectionType == SelectionType::Object && g_selectedIndex >= 0 && g_selectedIndex < static_cast<int>(g_sceneObjects.size())) {
+                        SceneObject& obj = g_sceneObjects[g_selectedIndex];
+                        ImGui::Text("Object: %s", obj.name.c_str());
+                        ImGui::Separator();
+                        ImGui::SliderFloat("Clearcoat Factor", &obj.clearcoatFactor, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Clearcoat Roughness", &obj.clearcoatRoughness, 0.01f, 0.5f);
+                        ImGui::SliderFloat("Flake Strength", &obj.flakeStrength, 0.0f, 0.3f);
+                        ImGui::SliderFloat("Flake Scale", &obj.flakeScale, 50.0f, 1000.0f);
+                    }
+                    else if (g_selectionType == SelectionType::Light && g_selectedIndex >= 0 && g_selectedIndex < static_cast<int>(g_sceneLights.size())) {
+                        SceneLight& light = g_sceneLights[g_selectedIndex];
+                        ImGui::Text("Light: %s", light.name.c_str());
+                        ImGui::Separator();
+                        ImGui::SliderFloat3("Position", &light.position.x, -10.0f, 10.0f);
+                        ImGui::ColorEdit3("Color", &light.color.x);
+                        ImGui::SliderFloat("Intensity", &light.intensity, 0.0f, 20.0f);
+                        ImGui::SliderFloat("Radius", &light.radius, 0.5f, 20.0f);
+                    }
+                    else {
+                        ImGui::TextDisabled("Nothing selected.");
+                    }
+                }
+                ImGui::End();
+
+                // --- Window 3: Scene Outliner ---
+                ImGui::SetNextWindowPos(ImVec2(1580, 20), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
+                ImGui::Begin("Scene Outliner", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                {
+                    ImGui::Text("Scene Objects:");
+                    for (int i = 0; i < static_cast<int>(g_sceneObjects.size()); i++) {
+                        bool isSelected = (g_selectionType == SelectionType::Object && g_selectedIndex == i);
+                        if (ImGui::Selectable(g_sceneObjects[i].name.c_str(), isSelected)) {
+                            g_selectionType = SelectionType::Object;
+                            g_selectedIndex = i;
+                        }
+                    }
+
+                    ImGui::Separator();
+                    ImGui::Text("Scene Lights:");
+                    for (int i = 0; i < static_cast<int>(g_sceneLights.size()); i++) {
+                        bool isSelected = (g_selectionType == SelectionType::Light && g_selectedIndex == i);
+                        if (ImGui::Selectable(g_sceneLights[i].name.c_str(), isSelected)) {
+                            g_selectionType = SelectionType::Light;
+                            g_selectedIndex = i;
+                        }
+                    }
+                }
                 ImGui::End();
 
                 imguiManager.EndFrame();
             }
-
+            
             RecordFrame(commandBuffers[imageIndex], imageIndex, swapchain, renderPass,
                 pipeline, tonemapPipeline, skybox, model, imguiManager, g_showGui, g_renderParams);
 

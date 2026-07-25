@@ -11,6 +11,7 @@ layout(binding = 0) uniform UniformBufferObject {
 
 layout(push_constant) uniform PushConstants {
     vec4 lightDirAndIntensity;
+    vec4 sunColor;
     float clearcoatFactor;
     float clearcoatRoughness;
     float flakeStrength;
@@ -198,7 +199,7 @@ void main() {
 
     // Sun
     vec3 sunDir = normalize(pc.lightDirAndIntensity.xyz);
-    vec3 sunColor = vec3(1.0, 0.98, 0.92) * pc.lightDirAndIntensity.w;
+    vec3 sunColor = pc.sunColor.rgb * pc.lightDirAndIntensity.w;
     ACCUMULATE_LIGHT(sunDir, sunColor)
 
     // Determine which cluster this fragment belongs to
