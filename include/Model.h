@@ -32,6 +32,7 @@ public:
         const VulkanContext::IBLTextures& iblTextures, const BufferAndMemory& lightBuffer,
         const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer);
     void Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex) const;
+    void DrawGeometryOnly(VkCommandBuffer commandBuffer) const;
     void Cleanup(VkDevice device);
 
 private:

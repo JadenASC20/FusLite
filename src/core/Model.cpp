@@ -174,7 +174,18 @@ void Model::Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
         VkDescriptorSet set = m_descriptorSets[sub.materialIndex][imageIndex];
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
             0, 1, &set, 0, nullptr);
+        vkCmdDrawIndexed(commandBuffer, sub.indexCount, 1, sub.firstIndex, sub.vertexOffset, 0);
+    }
+}
 
+void Model::DrawGeometryOnly(VkCommandBuffer commandBuffer) const
+{
+    VkBuffer vertexBuffers[] = { m_vertexBuffer.buffer };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(commandBuffer, m_indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+    for (const auto& sub : m_subMeshes) {
         vkCmdDrawIndexed(commandBuffer, sub.indexCount, 1, sub.firstIndex, sub.vertexOffset, 0);
     }
 }

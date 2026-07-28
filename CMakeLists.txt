@@ -79,6 +79,9 @@ add_executable(FusLite
     src/core/ComputeTest.cpp
     src/core/ClusterBuilder.cpp
     src/core/LightCuller.cpp
+    src/core/ShadowPipeline.cpp
+    src/core/ShadowMap.cpp
+
 
     # ImGui core
     ${IMGUI_DIR}/imgui.cpp

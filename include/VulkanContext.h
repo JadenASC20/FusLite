@@ -86,6 +86,8 @@ public:
 
     IBLTextures CreateIBLFromEquirect(const char* filename);
 
+    uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+
 private:
     void CreateInstance(const char* pAppName);
     void SetupDebugMessenger();
@@ -127,7 +129,6 @@ private:
     };
 
     BufferAndMemory CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties);
-    uint32_t FindMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
     void CopyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
 
     void CreateImage(uint32_t width, uint32_t height, VkFormat format, VkImageUsageFlags usage,

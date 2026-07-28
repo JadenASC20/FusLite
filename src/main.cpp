@@ -23,6 +23,8 @@
 #include <ClusterConfig.h>
 #include <SceneTypes.h>
 #include <ColorTemperature.h>
+#include <ShadowMap.h>
+#include <ShadowPipeline.h>
 
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -95,6 +97,7 @@ void TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout
 
 void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swapchain,
     const RenderPass& renderResources, const GraphicsPipeline& pipeline, const TonemapPipeline& tonemapPipeline,
+    const ShadowMap& shadowMap, const ShadowPipeline& shadowPipeline, const glm::mat4& lightViewProj,
     const Skybox& skybox, const std::vector<Model>& showcaseSpheres,
     const std::vector<SceneObject>& sceneObjects,
     ImGuiManager& imguiManager, bool showGui, RenderParams params)
@@ -110,6 +113,48 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &beginInfo);
+
+    // --- Pass 0: Shadow map (depth-only, from the light's POV) ---
+    TransitionImage(cmd, shadowMap.GetImage(),
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+        0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+
+    VkRenderingAttachmentInfo shadowDepthAttachment{};
+    shadowDepthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    shadowDepthAttachment.imageView = shadowMap.GetImageView();
+    shadowDepthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    shadowDepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    shadowDepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // we need to read it later
+    shadowDepthAttachment.clearValue.depthStencil = { 1.0f, 0 };
+
+    VkRenderingInfo shadowRenderingInfo{};
+    shadowRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    shadowRenderingInfo.renderArea = { {0, 0}, { shadowMap.GetResolution(), shadowMap.GetResolution() } };
+    shadowRenderingInfo.layerCount = 1;
+    shadowRenderingInfo.colorAttachmentCount = 0;
+    shadowRenderingInfo.pDepthAttachment = &shadowDepthAttachment;
+
+    vkCmdBeginRendering(cmd, &shadowRenderingInfo);
+    shadowPipeline.Bind(cmd);
+
+    for (size_t i = 0; i < showcaseSpheres.size(); i++) {
+        ShadowPushConstants spc{};
+        spc.lightViewProj = lightViewProj;
+        spc.model = sceneObjects[i].transform;
+        shadowPipeline.PushConstants(cmd, spc);
+        showcaseSpheres[i].DrawGeometryOnly(cmd);
+    }
+
+    vkCmdEndRendering(cmd);
+
+    // Transition shadow map for shader reading in the main pass
+    TransitionImage(cmd, shadowMap.GetImage(),
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_DEPTH_BIT,
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
     // --- Pass 1: render scene + skybox into the HDR offscreen target ---
     TransitionImage(cmd, hdrImage,
@@ -321,6 +366,18 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), fullscreenVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), tonemapFrag, nullptr);
 
+        ShadowMap shadowMap;
+        shadowMap.Init(context, 2048);
+
+        VkShaderModule shadowVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/shadow_depth.vert.spv");
+        VkShaderModule shadowFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/shadow_depth.frag.spv");
+
+        ShadowPipeline shadowPipeline;
+        shadowPipeline.Init(context, shadowMap.GetFormat(), shadowMap.GetResolution(), shadowVert, shadowFrag);
+
+        vkDestroyShaderModule(context.GetDevice(), shadowVert, nullptr);
+        vkDestroyShaderModule(context.GetDevice(), shadowFrag, nullptr);
+
         ImGuiManager imguiManager;
         imguiManager.Init(context, window, swapchain.GetImageFormat(),
             static_cast<uint32_t>(swapchain.GetImages().size()));
@@ -402,6 +459,7 @@ int main() {
             memcpy(lightData, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
             vkUnmapMemory(context.GetDevice(), lightBuffer.memory);
 
+            glm::mat4 lightViewProj = ShadowMap::ComputeLightViewProj(g_sunDirection, 15.0f, 0.1f, 100.0f);
             uint32_t imageIndex = context.GetQueue()->AcquireNextImage();
 
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
@@ -428,13 +486,6 @@ int main() {
 
             g_renderParams.lightDirAndIntensity = glm::vec4(g_sunDirection, g_sunIntensity);
             g_renderParams.sunColor = glm::vec4(KelvinToRGB(g_sunKelvin), 0.0f);
-
-            if (!g_sceneObjects.empty()) {
-                g_renderParams.clearcoatFactor = g_sceneObjects[0].clearcoatFactor;
-                g_renderParams.clearcoatRoughness = g_sceneObjects[0].clearcoatRoughness;
-                g_renderParams.flakeStrength = g_sceneObjects[0].flakeStrength;
-                g_renderParams.flakeScale = g_sceneObjects[0].flakeScale;
-            }
 
             if (g_showGui) {
                 imguiManager.BeginFrame();
@@ -542,7 +593,8 @@ int main() {
             }
             
             RecordFrame(commandBuffers[imageIndex], imageIndex, swapchain, renderPass,
-                pipeline, tonemapPipeline, skybox, showcaseSpheres, g_sceneObjects,
+                pipeline, tonemapPipeline, shadowMap, shadowPipeline, lightViewProj,
+                skybox, showcaseSpheres, g_sceneObjects,
                 imguiManager, g_showGui, g_renderParams);
 
             context.GetQueue()->SubmitAsync(commandBuffers[imageIndex], imageIndex);
@@ -568,6 +620,8 @@ int main() {
         iblTextures.brdfLUT.Destroy(context.GetDevice());
         lightBuffer.Destroy(context.GetDevice());
         lightCuller.Cleanup(context.GetDevice());
+        shadowMap.Cleanup(context.GetDevice());
+        shadowPipeline.Cleanup();
         swapchain.Cleanup();
     }
     catch (const std::exception& e) {
