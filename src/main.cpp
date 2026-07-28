@@ -204,6 +204,8 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     for (size_t i = 0; i < showcaseSpheres.size(); i++) {
         const SceneObject& obj = sceneObjects[i];
         params.colorTint = glm::vec4(obj.colorTint, 0.0f);
+        params.roughness = obj.roughness;
+        params.metallic = obj.metallic;
         params.clearcoatFactor = obj.clearcoatFactor;
         params.clearcoatRoughness = obj.clearcoatRoughness;
         params.flakeStrength = obj.flakeStrength;
@@ -352,12 +354,22 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), shadowVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), shadowFrag, nullptr);
 
-        constexpr int NUM_SHOWCASE_SPHERES = 5;
-        std::vector<Model> showcaseSpheres(NUM_SHOWCASE_SPHERES);
-        std::vector<std::vector<BufferAndMemory>> showcaseUniformBuffers(NUM_SHOWCASE_SPHERES);
+        const std::vector<std::string> modelPaths = {
+            "assets/ShaderBall.obj",
+            "assets/ShaderBall.obj",
+            "assets/ShaderBall.obj",
+            "assets/ShaderBall.obj",
+            "assets/ShaderBall.obj",
+            "assets/floor.obj"
+        };
 
-        for (int i = 0; i < NUM_SHOWCASE_SPHERES; i++) {
-            showcaseSpheres[i].LoadFromFile(context, "assets/ShaderBall.obj");
+        const int NUM_SCENE_MODELS = static_cast<int>(modelPaths.size());
+
+        std::vector<Model> showcaseSpheres(NUM_SCENE_MODELS);
+        std::vector<std::vector<BufferAndMemory>> showcaseUniformBuffers(NUM_SCENE_MODELS);
+
+        for (int i = 0; i < NUM_SCENE_MODELS; i++) {
+            showcaseSpheres[i].LoadFromFile(context, modelPaths[i]);
 
             showcaseUniformBuffers[i].resize(swapchain.GetImages().size());
             for (auto& ubo : showcaseUniformBuffers[i]) {
@@ -367,7 +379,6 @@ int main() {
             showcaseSpheres[i].CreateDescriptorSets(pipeline, showcaseUniformBuffers[i], sizeof(UniformBufferObject),
                 iblTextures, lightBuffer, lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer(),
                 shadowMap.GetImageView(), shadowMap.GetSampler());
-            
         }
 
         VkShaderModule fullscreenVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
@@ -411,15 +422,24 @@ int main() {
         g_renderParams.farZ = 1000.0f;
 
         float spacing = 2.5f;
-        for (int i = 0; i < NUM_SHOWCASE_SPHERES; i++) {
+        for (int i = 0; i < 5; i++) {
             SceneObject sphere;
             sphere.name = "pSphere" + std::string(1, 'A' + i);
             sphere.transform = glm::translate(glm::mat4(1.0f), glm::vec3((i - 2) * spacing, 0.0f, 0.0f));
             sphere.colorTint = glm::vec3(0.7f, 0.1f, 0.1f);
             sphere.clearcoatFactor = 0.2f + i * 0.15f;
-            sphere.flakeStrength = 0.02f + i * 0.03f;
+            sphere.flakeStrength = 0.0f;
             g_sceneObjects.push_back(sphere);
         }
+
+        SceneObject ground;
+        ground.name = "pGroundPlane";
+        ground.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.15f, 0.0f))
+            * glm::scale(glm::mat4(1.0f), glm::vec3(10.0f));
+        ground.colorTint = glm::vec3(0.55f, 0.55f, 0.55f);
+        ground.clearcoatFactor = 0.0f;
+        ground.flakeStrength = 0.0f;
+        g_sceneObjects.push_back(ground);
 
         g_sceneLights.push_back({ "fPointLightA", { 2.0f, 1.5f, 2.0f }, { 1.0f, 0.0f, 0.0f }, 8.0f, 5.0f });
         g_sceneLights.push_back({ "fPointLightB", { -2.0f, 1.5f, 2.0f }, { 0.0f, 0.0f, 1.0f }, 8.0f, 5.0f });
@@ -546,6 +566,8 @@ int main() {
                         ImGui::Text("Object: %s", obj.name.c_str());
                         ImGui::Separator();
                         ImGui::ColorEdit3("Color", &obj.colorTint.x);
+                        ImGui::SliderFloat("Roughness", &obj.roughness, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Metallic", &obj.metallic, 0.0f, 1.0f);
                         ImGui::SliderFloat("Clearcoat Factor", &obj.clearcoatFactor, 0.0f, 1.0f);
                         ImGui::SliderFloat("Clearcoat Roughness", &obj.clearcoatRoughness, 0.01f, 0.5f);
                         ImGui::SliderFloat("Flake Strength", &obj.flakeStrength, 0.0f, 0.3f);

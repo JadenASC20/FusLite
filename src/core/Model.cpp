@@ -44,7 +44,7 @@ VulkanTexture Model::LoadMaterialTexture(VulkanContext& context, const aiScene* 
     if (type == aiTextureType_METALNESS || type == aiTextureType_DIFFUSE_ROUGHNESS) {
         // Neutral metallic-roughness: R=unused, G=roughness=0.5, B=metallic=0.0
         printf("Material has no %s texture, using default (roughness 0.5, non-metal)\n", debugLabel);
-        return context.CreateSolidColorTexture(0.0f, 0.5f, 0.0f, 1.0f, false);
+        return context.CreateSolidColorTexture(0.0f, 1.0f, 1.0f, 1.0f, false);
     }
 
     aiColor4D baseColor(1.0f, 1.0f, 1.0f, 1.0f);

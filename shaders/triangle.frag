@@ -22,7 +22,10 @@ layout(push_constant) uniform PushConstants {
     vec2 screenSize;
     float nearZ;
     float farZ;
+    float roughness;
+    float metallic;
 } pc;
+
 
 layout(binding = 1) uniform sampler2D diffuseSampler;
 layout(binding = 2) uniform sampler2D metallicRoughnessSampler; // G=roughness, B=metallic (glTF convention)
@@ -168,32 +171,39 @@ float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
 {
     vec4 lightSpacePos = ubo.lightViewProj * vec4(fragPosWorld, 1.0);
     vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
-
-    // Vulkan NDC: xy in [-1,1] -> [0,1] for texture sampling; z already in [0,1]
     projCoords.xy = projCoords.xy * 0.5 + 0.5;
 
-    // Outside the shadow map's coverage — treat as fully lit
     if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0 ||
         projCoords.z > 1.0) {
         return 1.0;
     }
 
-    float closestDepth = texture(shadowMap, projCoords.xy).r;
     float currentDepth = projCoords.z;
-
-    // Slope-scaled bias to reduce shadow acne on surfaces at grazing angles to the light
     float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
 
-    return (currentDepth - bias > closestDepth) ? 0.0 : 1.0;
+    // PCF: average a grid of neighbouring samples so edges become a gradient
+    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
+    const int PCF_RADIUS = 2;
+    float shadow = 0.0;
+
+    for (int x = -PCF_RADIUS; x <= PCF_RADIUS; x++) {
+        for (int y = -PCF_RADIUS; y <= PCF_RADIUS; y++) {
+            float sampleDepth = texture(shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
+            shadow += (currentDepth - bias > sampleDepth) ? 0.0 : 1.0;
+        }
+    }
+
+    float sampleCount = float((2 * PCF_RADIUS + 1) * (2 * PCF_RADIUS + 1));
+    return shadow / sampleCount;
 }
 
 void main() {
     vec3 albedo = texture(diffuseSampler, fragTexCoord).rgb;
     albedo *= pc.colorTint.rgb;
     vec2 mr = texture(metallicRoughnessSampler, fragTexCoord).gb;
-    float roughness = clamp(mr.x, 0.05, 1.0);
-    float metallic = mr.y;
+    float roughness = clamp(mr.x * pc.roughness, 0.05, 1.0);
+    float metallic = clamp(mr.y * pc.metallic, 0.0, 1.0);
 
     float clearcoatFactor = pc.clearcoatFactor;
     float clearcoatRoughness = pc.clearcoatRoughness;

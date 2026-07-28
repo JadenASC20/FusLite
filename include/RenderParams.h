@@ -14,6 +14,8 @@ struct RenderParams
     glm::vec2 screenSize = { 1920.0f, 1080.0f };
     float nearZ = 0.1f;
     float farZ = 1000.0f;
+    float roughness = 0.5f;
+    float metallic = 0.0f;
 };
 
 constexpr int MAX_LIGHTS = 128;
