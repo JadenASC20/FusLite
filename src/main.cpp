@@ -339,7 +339,19 @@ int main() {
 
         vkDestroyShaderModule(context.GetDevice(), vertShader, nullptr);
         vkDestroyShaderModule(context.GetDevice(), fragShader, nullptr);
-        
+
+        ShadowMap shadowMap;
+        shadowMap.Init(context, 2048);
+
+        VkShaderModule shadowVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/shadow_depth.vert.spv");
+        VkShaderModule shadowFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/shadow_depth.frag.spv");
+
+        ShadowPipeline shadowPipeline;
+        shadowPipeline.Init(context, shadowMap.GetFormat(), shadowMap.GetResolution(), shadowVert, shadowFrag);
+
+        vkDestroyShaderModule(context.GetDevice(), shadowVert, nullptr);
+        vkDestroyShaderModule(context.GetDevice(), shadowFrag, nullptr);
+
         constexpr int NUM_SHOWCASE_SPHERES = 5;
         std::vector<Model> showcaseSpheres(NUM_SHOWCASE_SPHERES);
         std::vector<std::vector<BufferAndMemory>> showcaseUniformBuffers(NUM_SHOWCASE_SPHERES);
@@ -353,7 +365,9 @@ int main() {
             }
 
             showcaseSpheres[i].CreateDescriptorSets(pipeline, showcaseUniformBuffers[i], sizeof(UniformBufferObject),
-                iblTextures, lightBuffer, lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer());
+                iblTextures, lightBuffer, lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer(),
+                shadowMap.GetImageView(), shadowMap.GetSampler());
+            
         }
 
         VkShaderModule fullscreenVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
@@ -365,18 +379,6 @@ int main() {
 
         vkDestroyShaderModule(context.GetDevice(), fullscreenVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), tonemapFrag, nullptr);
-
-        ShadowMap shadowMap;
-        shadowMap.Init(context, 2048);
-
-        VkShaderModule shadowVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/shadow_depth.vert.spv");
-        VkShaderModule shadowFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/shadow_depth.frag.spv");
-
-        ShadowPipeline shadowPipeline;
-        shadowPipeline.Init(context, shadowMap.GetFormat(), shadowMap.GetResolution(), shadowVert, shadowFrag);
-
-        vkDestroyShaderModule(context.GetDevice(), shadowVert, nullptr);
-        vkDestroyShaderModule(context.GetDevice(), shadowFrag, nullptr);
 
         ImGuiManager imguiManager;
         imguiManager.Init(context, window, swapchain.GetImageFormat(),
@@ -468,6 +470,7 @@ int main() {
                 objUbo.view = camera.GetViewMatrix();
                 objUbo.proj = camera.GetProjectionMatrix();
                 objUbo.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
+                objUbo.lightViewProj = lightViewProj;
 
                 void* objData;
                 vkMapMemory(context.GetDevice(), showcaseUniformBuffers[i][imageIndex].memory, 0, sizeof(objUbo), 0, &objData);

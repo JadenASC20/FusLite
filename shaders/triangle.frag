@@ -6,6 +6,7 @@ layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    mat4 lightViewProj;
     vec4 cameraPos;
 } ubo;
 
@@ -50,6 +51,8 @@ layout(std430, binding = 7) readonly buffer ClusterLightInfoBuffer {
 layout(std430, binding = 8) readonly buffer LightIndexBuffer {
     uint indices[];
 } lightIndexBuffer;
+
+layout(binding = 9) uniform sampler2D shadowMap;
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
@@ -161,6 +164,30 @@ vec3 ApplyFlakeNormal(vec3 N, vec3 tangent, vec3 bitangent, vec2 uv, float flake
     return normalize(N + perturb);
 }
 
+float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
+{
+    vec4 lightSpacePos = ubo.lightViewProj * vec4(fragPosWorld, 1.0);
+    vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
+
+    // Vulkan NDC: xy in [-1,1] -> [0,1] for texture sampling; z already in [0,1]
+    projCoords.xy = projCoords.xy * 0.5 + 0.5;
+
+    // Outside the shadow map's coverage — treat as fully lit
+    if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0 ||
+        projCoords.z > 1.0) {
+        return 1.0;
+    }
+
+    float closestDepth = texture(shadowMap, projCoords.xy).r;
+    float currentDepth = projCoords.z;
+
+    // Slope-scaled bias to reduce shadow acne on surfaces at grazing angles to the light
+    float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
+
+    return (currentDepth - bias > closestDepth) ? 0.0 : 1.0;
+}
+
 void main() {
     vec3 albedo = texture(diffuseSampler, fragTexCoord).rgb;
     albedo *= pc.colorTint.rgb;
@@ -202,6 +229,11 @@ void main() {
     // Sun
     vec3 sunDir = normalize(pc.lightDirAndIntensity.xyz);
     vec3 sunColor = pc.sunColor.rgb * pc.lightDirAndIntensity.w;
+
+ 
+    float surfaceShadow = ComputeShadow(fragPosWorld, N, sunDir);
+    sunColor *= surfaceShadow; // apply shadow to the sun only, for now
+
     ACCUMULATE_LIGHT(sunDir, sunColor)
 
     // Determine which cluster this fragment belongs to
