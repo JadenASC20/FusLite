@@ -24,6 +24,7 @@ layout(push_constant) uniform PushConstants {
     float farZ;
     float roughness;
     float metallic;
+    float lightSize;
 } pc;
 
 
@@ -167,6 +168,40 @@ vec3 ApplyFlakeNormal(vec3 N, vec3 tangent, vec3 bitangent, vec2 uv, float flake
     return normalize(N + perturb);
 }
 
+const int BLOCKER_SAMPLES = 16;
+const int PCF_SAMPLES = 16;
+
+// Poisson disk: pre-scattered sample offsets. Better than a square grid because
+// the irregular spacing turns banding artifacts into much less visible noise.
+const vec2 POISSON[16] = vec2[](
+    vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
+    vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
+    vec2(-0.91588581,  0.45771432), vec2(-0.81544232, -0.87912464),
+    vec2(-0.38277543,  0.27676845), vec2( 0.97484398,  0.75648379),
+    vec2( 0.44323325, -0.97511554), vec2( 0.53742981, -0.47373420),
+    vec2(-0.26496911, -0.41893023), vec2( 0.79197514,  0.19090188),
+    vec2(-0.24188840,  0.99706507), vec2(-0.81409955,  0.91437590),
+    vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790)
+);
+
+// Stage 1: how far away is whatever is blocking the light?
+float FindBlockerDepth(vec2 uv, float currentDepth, float searchRadius)
+{
+    float blockerSum = 0.0;
+    int blockerCount = 0;
+
+    for (int i = 0; i < BLOCKER_SAMPLES; i++) {
+        float sampleDepth = texture(shadowMap, uv + POISSON[i] * searchRadius).r;
+        if (sampleDepth < currentDepth) {
+            blockerSum += sampleDepth;
+            blockerCount++;
+        }
+    }
+
+    if (blockerCount == 0) return -1.0;   // nothing blocking: fully lit
+    return blockerSum / float(blockerCount);
+}
+
 float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
 {
     vec4 lightSpacePos = ubo.lightViewProj * vec4(fragPosWorld, 1.0);
@@ -182,20 +217,25 @@ float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
     float currentDepth = projCoords.z;
     float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
 
-    // PCF: average a grid of neighbouring samples so edges become a gradient
-    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
-    const int PCF_RADIUS = 2;
-    float shadow = 0.0;
+    // Stage 1: blocker search
+    float searchRadius = pc.lightSize * 0.5;
+    float avgBlockerDepth = FindBlockerDepth(projCoords.xy, currentDepth - bias, searchRadius);
+    if (avgBlockerDepth < 0.0) return 1.0;
 
-    for (int x = -PCF_RADIUS; x <= PCF_RADIUS; x++) {
-        for (int y = -PCF_RADIUS; y <= PCF_RADIUS; y++) {
-            float sampleDepth = texture(shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
-            shadow += (currentDepth - bias > sampleDepth) ? 0.0 : 1.0;
-        }
+    // Stage 2: penumbra width. The further the receiver is behind the blocker,
+    // the wider the soft region — this ratio is the whole PCSS idea.
+    float penumbraRatio = (currentDepth - avgBlockerDepth) / max(avgBlockerDepth, 0.0001);
+    float filterRadius = penumbraRatio * pc.lightSize;
+    filterRadius = clamp(filterRadius, 0.0005, 0.02);
+
+    // Stage 3: PCF at that computed radius
+    float shadow = 0.0;
+    for (int i = 0; i < PCF_SAMPLES; i++) {
+        float sampleDepth = texture(shadowMap, projCoords.xy + POISSON[i] * filterRadius).r;
+        shadow += (currentDepth - bias > sampleDepth) ? 0.0 : 1.0;
     }
 
-    float sampleCount = float((2 * PCF_RADIUS + 1) * (2 * PCF_RADIUS + 1));
-    return shadow / sampleCount;
+    return shadow / float(PCF_SAMPLES);
 }
 
 void main() {

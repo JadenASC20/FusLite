@@ -50,6 +50,7 @@ static int g_selectedIndex = -1;
 static float g_sunKelvin = 5500.0f;
 static glm::vec3 g_sunDirection = { -0.5f, 1.0f, -0.3f };
 static float g_sunIntensity = 3.0f;
+static float g_lightSize = 0.05f;
 
 static Camera* g_camera = nullptr;
 static bool g_showGui = true;
@@ -434,7 +435,7 @@ int main() {
 
         SceneObject ground;
         ground.name = "pGroundPlane";
-        ground.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -0.15f, 0.0f))
+        ground.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1.0f, 0.0f))
             * glm::scale(glm::mat4(1.0f), glm::vec3(10.0f));
         ground.colorTint = glm::vec3(0.55f, 0.55f, 0.55f);
         ground.clearcoatFactor = 0.0f;
@@ -509,6 +510,7 @@ int main() {
 
             g_renderParams.lightDirAndIntensity = glm::vec4(g_sunDirection, g_sunIntensity);
             g_renderParams.sunColor = glm::vec4(KelvinToRGB(g_sunKelvin), 0.0f);
+            g_renderParams.lightSize = g_lightSize;
 
             if (g_showGui) {
                 imguiManager.BeginFrame();
@@ -547,7 +549,7 @@ int main() {
                     ImGui::Text("Lighting (Sun)");
                     ImGui::SliderFloat3("Light Dir", &g_sunDirection.x, -1.0f, 1.0f);
                     ImGui::SliderFloat("Light Intensity", &g_sunIntensity, 0.0f, 10.0f);
-                    
+                    ImGui::SliderFloat("Light Size", &g_lightSize, 0.001f, 0.2f, "%.3f");
                     glm::vec3 previewColor = KelvinToRGB(g_sunKelvin);
                     ImGui::ColorButton("##sunPreview", ImVec4(previewColor.r, previewColor.g, previewColor.b, 1.0f),
                         0, ImVec2(40, 25));

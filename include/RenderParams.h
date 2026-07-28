@@ -16,6 +16,7 @@ struct RenderParams
     float farZ = 1000.0f;
     float roughness = 0.5f;
     float metallic = 0.0f;
+    float lightSize = 0.05f;
 };
 
 constexpr int MAX_LIGHTS = 128;
