@@ -31,7 +31,7 @@ public:
         const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
         const VulkanContext::IBLTextures& iblTextures, const BufferAndMemory& lightBuffer,
         const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer,
-        VkImageView shadowMapView, VkSampler shadowMapSampler);
+        VkImageView shadowMapView, VkSampler shadowMapSampler, const BufferAndMemory& rampBuffer);
     
     void Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex) const;
     void DrawGeometryOnly(VkCommandBuffer commandBuffer) const;

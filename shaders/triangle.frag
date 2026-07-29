@@ -1,6 +1,7 @@
 #version 450
 
 #define MAX_LIGHTS 128
+#define RAMP_RESOLUTION 64
 
 layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
@@ -8,6 +9,8 @@ layout(binding = 0) uniform UniformBufferObject {
     mat4 proj;
     mat4 lightViewProj;
     vec4 cameraPos;
+    vec4 penumbraParams;   // x weight, y rampIndex, z bands, w patternStrength
+    vec4 penumbraPattern;  // x mode, y scale, zw unused
 } ubo;
 
 layout(push_constant) uniform PushConstants {
@@ -57,6 +60,10 @@ layout(std430, binding = 8) readonly buffer LightIndexBuffer {
 } lightIndexBuffer;
 
 layout(binding = 9) uniform sampler2D shadowMap;
+
+layout(std430, binding = 10) readonly buffer PenumbraRampBuffer {
+    vec4 colors[];
+} rampBuffer;
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
@@ -238,6 +245,31 @@ float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
     return shadow / float(PCF_SAMPLES);
 }
 
+vec3 SampleRamp(float t, int rampIndex)
+{
+    float f = clamp(t, 0.0, 1.0) * float(RAMP_RESOLUTION - 1);
+    int i0 = int(floor(f));
+    int i1 = min(i0 + 1, RAMP_RESOLUTION - 1);
+    int base = rampIndex * RAMP_RESOLUTION;
+    return mix(rampBuffer.colors[base + i0].rgb,
+               rampBuffer.colors[base + i1].rgb, f - float(i0));
+}
+
+// Procedural patterns that warp where the ramp transitions, giving the
+// penumbra a dappled, hatched, or halftone edge instead of a clean gradient.
+float PenumbraPattern(int mode, vec2 uv, float scale)
+{
+    if (mode == 1) {                                  // noise
+        return Hash(floor(uv * scale));
+    } else if (mode == 2) {                           // hatch
+        return 0.5 + 0.5 * sin((uv.x + uv.y) * scale * 3.14159);
+    } else if (mode == 3) {                           // halftone
+        vec2 c = fract(uv * scale) - 0.5;
+        return smoothstep(0.35, 0.15, length(c));
+    }
+    return 0.5;
+}
+
 void main() {
     vec3 albedo = texture(diffuseSampler, fragTexCoord).rgb;
     albedo *= pc.colorTint.rgb;
@@ -285,6 +317,7 @@ void main() {
     sunColor *= surfaceShadow; // apply shadow to the sun only, for now
 
     ACCUMULATE_LIGHT(sunDir, sunColor)
+    vec3 sunLight = totalLight;
 
     // Determine which cluster this fragment belongs to
     ivec3 gridDims = ivec3(pc.clusterGridAndScreen.xyz);
@@ -325,6 +358,35 @@ void main() {
 
         ACCUMULATE_LIGHT(pointL, pointRadiance)
     }
+
+    // Coloured penumbra: retint the sun's contribution as it falls into shadow.
+    // Applied to the sun only, since surfaceShadow describes the sun's occlusion.
+    vec3 pointLight = totalLight - sunLight;
+
+    float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    float penumbraT = 1.0 - surfaceShadow + (dither - 0.5) * (1.0 / float(PCF_SAMPLES));
+
+    int patternMode = int(ubo.penumbraPattern.x);
+    if (patternMode > 0) {
+        float p = PenumbraPattern(patternMode, fragTexCoord, ubo.penumbraPattern.y);
+        penumbraT += (p - 0.5) * ubo.penumbraParams.w;
+    }
+    penumbraT = clamp(penumbraT, 0.0, 1.0);
+
+    float bands = ubo.penumbraParams.z;
+    if (bands > 0.5) {
+        penumbraT = floor(penumbraT * bands) / bands;
+    }
+
+    vec3 rampColor = SampleRamp(penumbraT, int(ubo.penumbraParams.y));
+
+    const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+    float lum = dot(sunLight, LUMA);
+    float rampLum = max(dot(rampColor, LUMA), 0.001);
+    vec3 tinted = rampColor * (lum / rampLum);
+
+    sunLight = mix(sunLight, tinted, ubo.penumbraParams.x * penumbraT);
+    totalLight = sunLight + pointLight;
 
     vec3 baseLayer = totalLight;
 

@@ -25,6 +25,7 @@
 #include <ColorTemperature.h>
 #include <ShadowMap.h>
 #include <ShadowPipeline.h>
+#include <RampUtil.h>
 
 #include <imgui.h>
 #include <ImGuizmo.h>
@@ -355,6 +356,9 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), shadowVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), shadowFrag, nullptr);
 
+        BufferAndMemory rampBuffer = context.CreateStorageBuffer(
+            sizeof(glm::vec4) * MAX_RAMP_OBJECTS * RAMP_RESOLUTION);
+
         const std::vector<std::string> modelPaths = {
             "assets/ShaderBall.obj",
             "assets/ShaderBall.obj",
@@ -379,7 +383,7 @@ int main() {
 
             showcaseSpheres[i].CreateDescriptorSets(pipeline, showcaseUniformBuffers[i], sizeof(UniformBufferObject),
                 iblTextures, lightBuffer, lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer(),
-                shadowMap.GetImageView(), shadowMap.GetSampler());
+                shadowMap.GetImageView(), shadowMap.GetSampler(), rampBuffer);
         }
 
         VkShaderModule fullscreenVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
@@ -482,16 +486,34 @@ int main() {
             memcpy(lightData, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
             vkUnmapMemory(context.GetDevice(), lightBuffer.memory);
 
+            std::vector<glm::vec4> rampData(MAX_RAMP_OBJECTS * RAMP_RESOLUTION, glm::vec4(1.0f));
+            for (int obj = 0; obj < MAX_RAMP_OBJECTS && obj < static_cast<int>(g_sceneObjects.size()); obj++) {
+                for (int s = 0; s < RAMP_RESOLUTION; s++) {
+                    float t = float(s) / float(RAMP_RESOLUTION - 1);
+                    rampData[obj * RAMP_RESOLUTION + s] =
+                        glm::vec4(EvaluateRamp(g_sceneObjects[obj].penumbraStops, t), 1.0f);
+                }
+            }
+            void* rampPtr;
+            vkMapMemory(context.GetDevice(), rampBuffer.memory, 0,
+                sizeof(glm::vec4) * rampData.size(), 0, &rampPtr);
+            memcpy(rampPtr, rampData.data(), sizeof(glm::vec4) * rampData.size());
+            vkUnmapMemory(context.GetDevice(), rampBuffer.memory);
+
             glm::mat4 lightViewProj = ShadowMap::ComputeLightViewProj(g_sunDirection, 15.0f, 0.1f, 100.0f);
             uint32_t imageIndex = context.GetQueue()->AcquireNextImage();
 
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
+                const SceneObject& o = g_sceneObjects[i];
+
                 UniformBufferObject objUbo{};
-                objUbo.model = g_sceneObjects[i].transform;
+                objUbo.model = o.transform;
                 objUbo.view = camera.GetViewMatrix();
                 objUbo.proj = camera.GetProjectionMatrix();
                 objUbo.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
                 objUbo.lightViewProj = lightViewProj;
+                objUbo.penumbraParams = glm::vec4(o.penumbraWeight, float(i), o.penumbraBands, o.penumbraPatternStrength);
+                objUbo.penumbraPattern = glm::vec4(float(o.penumbraPattern), o.penumbraPatternScale, 0.0f, 0.0f);
 
                 void* objData;
                 vkMapMemory(context.GetDevice(), showcaseUniformBuffers[i][imageIndex].memory, 0, sizeof(objUbo), 0, &objData);
@@ -574,6 +596,45 @@ int main() {
                         ImGui::SliderFloat("Clearcoat Roughness", &obj.clearcoatRoughness, 0.01f, 0.5f);
                         ImGui::SliderFloat("Flake Strength", &obj.flakeStrength, 0.0f, 0.3f);
                         ImGui::SliderFloat("Flake Scale", &obj.flakeScale, 50.0f, 1000.0f);
+                        ImGui::Separator();
+                        ImGui::Text("Shadow Penumbra");
+
+                        ImVec2 p = ImGui::GetCursorScreenPos();
+                        float w = ImGui::GetContentRegionAvail().x, h = 22.0f;
+                        ImDrawList* dl = ImGui::GetWindowDrawList();
+                        for (int s = 0; s < 48; s++) {
+                            glm::vec3 c = EvaluateRamp(obj.penumbraStops, float(s) / 47.0f);
+                            dl->AddRectFilled(ImVec2(p.x + w * s / 48.0f, p.y),
+                                ImVec2(p.x + w * (s + 1) / 48.0f, p.y + h),
+                                IM_COL32(int(c.r * 255), int(c.g * 255), int(c.b * 255), 255));
+                        }
+                        ImGui::Dummy(ImVec2(w, h + 4));
+
+                        for (int s = 0; s < static_cast<int>(obj.penumbraStops.size()); s++) {
+                            ImGui::PushID(s);
+                            ImGui::ColorEdit3("##col", &obj.penumbraStops[s].color.x, ImGuiColorEditFlags_NoInputs);
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(120);
+                            ImGui::SliderFloat("##pos", &obj.penumbraStops[s].position, 0.0f, 1.0f, "%.2f");
+                            if (obj.penumbraStops.size() > 2) {
+                                ImGui::SameLine();
+                                if (ImGui::SmallButton("x")) {
+                                    obj.penumbraStops.erase(obj.penumbraStops.begin() + s);
+                                    ImGui::PopID();
+                                    break;
+                                }
+                            }
+                            ImGui::PopID();
+                        }
+                        if (static_cast<int>(obj.penumbraStops.size()) < MAX_RAMP_STOPS && ImGui::Button("Add stop")) {
+                            obj.penumbraStops.push_back({ glm::vec3(1.0f), 0.5f });
+                        }
+
+                        ImGui::SliderFloat("Layer Weight", &obj.penumbraWeight, 0.0f, 1.0f);
+                        ImGui::SliderFloat("Ramp Bands", &obj.penumbraBands, 0.0f, 12.0f, "%.0f");
+                        ImGui::Combo("Pattern", &obj.penumbraPattern, "None\0Noise\0Hatch\0Halftone\0");
+                        ImGui::SliderFloat("Pattern Scale", &obj.penumbraPatternScale, 1.0f, 200.0f);
+                        ImGui::SliderFloat("Pattern Strength", &obj.penumbraPatternStrength, 0.0f, 0.5f);
                     }
                     else if (g_selectionType == SelectionType::Light && g_selectedIndex >= 0 && g_selectedIndex < static_cast<int>(g_sceneLights.size())) {
                         SceneLight& light = g_sceneLights[g_selectedIndex];
@@ -649,6 +710,7 @@ int main() {
         lightCuller.Cleanup(context.GetDevice());
         shadowMap.Cleanup(context.GetDevice());
         shadowPipeline.Cleanup();
+        rampBuffer.Destroy(context.GetDevice());
         swapchain.Cleanup();
     }
     catch (const std::exception& e) {

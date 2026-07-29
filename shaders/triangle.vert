@@ -6,6 +6,8 @@ layout(binding = 0) uniform UniformBufferObject {
     mat4 proj;
     mat4 lightViewProj;
     vec4 cameraPos;
+    vec4 penumbraParams;
+    vec4 penumbraPattern;
 } ubo;
 
 layout(location = 0) in vec3 inPosition;
