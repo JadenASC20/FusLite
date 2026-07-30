@@ -175,12 +175,10 @@ vec3 ApplyFlakeNormal(vec3 N, vec3 tangent, vec3 bitangent, vec2 uv, float flake
     return normalize(N + perturb);
 }
 
-const int BLOCKER_SAMPLES = 16;
-const int PCF_SAMPLES = 16;
+const int BLOCKER_SAMPLES = 24;
+const int PCF_SAMPLES = 32;
 
-// Poisson disk: pre-scattered sample offsets. Better than a square grid because
-// the irregular spacing turns banding artifacts into much less visible noise.
-const vec2 POISSON[16] = vec2[](
+const vec2 POISSON[32] = vec2[](
     vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
     vec2(-0.09418410, -0.92938870), vec2( 0.34495938,  0.29387760),
     vec2(-0.91588581,  0.45771432), vec2(-0.81544232, -0.87912464),
@@ -188,24 +186,32 @@ const vec2 POISSON[16] = vec2[](
     vec2( 0.44323325, -0.97511554), vec2( 0.53742981, -0.47373420),
     vec2(-0.26496911, -0.41893023), vec2( 0.79197514,  0.19090188),
     vec2(-0.24188840,  0.99706507), vec2(-0.81409955,  0.91437590),
-    vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790)
+    vec2( 0.19984126,  0.78641367), vec2( 0.14383161, -0.14100790),
+    vec2( 0.61461878,  0.52732132), vec2(-0.54130814,  0.71391660),
+    vec2( 0.07953821, -0.53107584), vec2(-0.60918891, -0.12481321),
+    vec2( 0.28129430,  0.62823123), vec2(-0.13138071,  0.40128181),
+    vec2( 0.71981132, -0.24193218), vec2(-0.42198131, -0.63821921),
+    vec2( 0.03812310,  0.13214128), vec2(-0.72183411,  0.19832141),
+    vec2( 0.48132198, -0.71328913), vec2(-0.18213289, -0.78213198),
+    vec2( 0.89321381,  0.41832197), vec2(-0.93218319, -0.61283197),
+    vec2( 0.32189312,  0.91832137), vec2(-0.51832197,  0.28193281)
 );
 
 // Stage 1: how far away is whatever is blocking the light?
-float FindBlockerDepth(vec2 uv, float currentDepth, float searchRadius)
+float FindBlockerDepth(vec2 uv, float currentDepth, float searchRadius, float rotSin, float rotCos)
 {
     float blockerSum = 0.0;
     int blockerCount = 0;
-
     for (int i = 0; i < BLOCKER_SAMPLES; i++) {
-        float sampleDepth = texture(shadowMap, uv + POISSON[i] * searchRadius).r;
+        vec2 o = POISSON[i];
+        vec2 r = vec2(o.x * rotCos - o.y * rotSin, o.x * rotSin + o.y * rotCos);
+        float sampleDepth = texture(shadowMap, uv + r * searchRadius).r;
         if (sampleDepth < currentDepth) {
             blockerSum += sampleDepth;
             blockerCount++;
         }
     }
-
-    if (blockerCount == 0) return -1.0;   // nothing blocking: fully lit
+    if (blockerCount == 0) return -1.0;
     return blockerSum / float(blockerCount);
 }
 
@@ -223,22 +229,26 @@ float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
 
     float currentDepth = projCoords.z;
     float bias = max(0.005 * (1.0 - dot(N, L)), 0.0005);
+    float angle = Hash(gl_FragCoord.xy) * 6.28318;
+    float rotSin = sin(angle);
+    float rotCos = cos(angle);
 
     // Stage 1: blocker search
     float searchRadius = pc.lightSize * 0.5;
-    float avgBlockerDepth = FindBlockerDepth(projCoords.xy, currentDepth - bias, searchRadius);
+    float avgBlockerDepth = FindBlockerDepth(projCoords.xy, currentDepth - bias, searchRadius, rotSin, rotCos);
     if (avgBlockerDepth < 0.0) return 1.0;
 
     // Stage 2: penumbra width. The further the receiver is behind the blocker,
     // the wider the soft region — this ratio is the whole PCSS idea.
     float penumbraRatio = (currentDepth - avgBlockerDepth) / max(avgBlockerDepth, 0.0001);
-    float filterRadius = penumbraRatio * pc.lightSize;
-    filterRadius = clamp(filterRadius, 0.0005, 0.02);
+    float filterRadius = clamp(penumbraRatio * pc.lightSize, 0.0005, 0.02);
 
     // Stage 3: PCF at that computed radius
     float shadow = 0.0;
     for (int i = 0; i < PCF_SAMPLES; i++) {
-        float sampleDepth = texture(shadowMap, projCoords.xy + POISSON[i] * filterRadius).r;
+        vec2 o = POISSON[i];
+        vec2 r = vec2(o.x * rotCos - o.y * rotSin, o.x * rotSin + o.y * rotCos);
+        float sampleDepth = texture(shadowMap, projCoords.xy + r * filterRadius).r;
         shadow += (currentDepth - bias > sampleDepth) ? 0.0 : 1.0;
     }
 
@@ -364,14 +374,18 @@ void main() {
     vec3 pointLight = totalLight - sunLight;
 
     float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    
     float penumbraT = 1.0 - surfaceShadow + (dither - 0.5) * (1.0 / float(PCF_SAMPLES));
+    penumbraT = clamp(penumbraT, 0.0, 1.0);
 
     int patternMode = int(ubo.penumbraPattern.x);
     if (patternMode > 0) {
         float p = PenumbraPattern(patternMode, fragTexCoord, ubo.penumbraPattern.y);
-        penumbraT += (p - 0.5) * ubo.penumbraParams.w;
+        // Mask by the transition band: peaks at penumbraT = 0.5, zero at both ends.
+        // Fully lit and fully shadowed areas are left alone.
+        float edgeMask = 4.0 * penumbraT * (1.0 - penumbraT);
+        penumbraT = clamp(penumbraT + (p - 0.5) * ubo.penumbraParams.w * edgeMask, 0.0, 1.0);
     }
-    penumbraT = clamp(penumbraT, 0.0, 1.0);
 
     float bands = ubo.penumbraParams.z;
     if (bands > 0.5) {
@@ -408,7 +422,8 @@ void main() {
     vec3 specularIBL = prefilteredColor * (F0 * brdf.x + brdf.y);
 
     vec3 ambient = kD_ibl * diffuseIBL + specularIBL;
-    vec3 finalColor = ambient + outgoing;
+    float ambientOcclusion = mix(0.35, 1.0, surfaceShadow);
+    vec3 finalColor = ambient * ambientOcclusion + outgoing;
 
     outColor = vec4(finalColor, 1.0);
 }
