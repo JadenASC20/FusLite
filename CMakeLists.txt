@@ -74,6 +74,7 @@ add_executable(FusLite
     src/core/Model.cpp
     src/core/stb_image_impl.cpp
     src/core/TonemapPipeline.cpp
+    src/core/ResolvePipeline.cpp
     src/core/Skybox.cpp
     src/core/ImGuiManager.cpp
     src/core/ComputeTest.cpp

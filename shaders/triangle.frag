@@ -7,10 +7,13 @@ layout(binding = 0) uniform UniformBufferObject {
     mat4 model;
     mat4 view;
     mat4 proj;
+    mat4 projNoJitter;
     mat4 lightViewProj;
+    mat4 prevModel;
+    mat4 prevViewProj;
     vec4 cameraPos;
-    vec4 penumbraParams;   // x weight, y rampIndex, z bands, w patternStrength
-    vec4 penumbraPattern;  // x mode, y scale, zw unused
+    vec4 penumbraParams;
+    vec4 penumbraPattern;
 } ubo;
 
 layout(push_constant) uniform PushConstants {
@@ -69,8 +72,11 @@ layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragNormalWorld;
 layout(location = 3) in vec3 fragPosWorld;
+layout(location = 4) in vec4 fragClipPos;
+layout(location = 5) in vec4 fragPrevClipPos;
 
 layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec2 outMotion;
 
 const float PI = 3.14159265359;
 
@@ -426,4 +432,9 @@ void main() {
     vec3 finalColor = ambient * ambientOcclusion + outgoing;
 
     outColor = vec4(finalColor, 1.0);
+
+    // Screen-space motion in UV units: where this pixel was, minus where it is.
+    vec2 currentNDC = fragClipPos.xy / fragClipPos.w;
+    vec2 prevNDC = fragPrevClipPos.xy / fragPrevClipPos.w;
+    outMotion = (prevNDC - currentNDC) * 0.5;
 }

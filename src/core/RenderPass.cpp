@@ -13,6 +13,8 @@ void RenderPass::Init(VulkanContext& context, const Swapchain& swapchain)
     m_depthFormat = context.FindDepthFormat();
     CreateDepthResources(swapchain);
     CreateHdrResources(swapchain);
+    CreateMotionResources(swapchain);
+    CreateHistoryResources(swapchain);
 }
 
 void RenderPass::CreateDepthResources(const Swapchain& swapchain)
@@ -105,7 +107,9 @@ void RenderPass::CreateHdrResources(const Swapchain& swapchain)
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         // COLOR_ATTACHMENT: the scene renders into it. SAMPLED: the tonemap pass reads it.
-        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        // COLOR_ATTACHMENT: the scene renders into it. SAMPLED: the tonemap pass reads it.
+        // TRANSFER_DST: the TAA resolve copies the resolved result back into it.
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -156,6 +160,127 @@ void RenderPass::CreateHdrResources(const Swapchain& swapchain)
     printf("%zu HDR color resource(s) created (R16G16B16A16_SFLOAT).\n", numImages);
 }
 
+void RenderPass::CreateMotionResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    size_t numImages = swapchain.GetImageViews().size();
+
+    m_motionImages.resize(numImages);
+    m_motionMemory.resize(numImages);
+    m_motionImageViews.resize(numImages);
+
+    for (size_t i = 0; i < numImages; i++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = { extent.width, extent.height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = m_motionFormat;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_motionImages[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create motion vector image");
+        }
+
+        VkMemoryRequirements memRequirements;
+        vkGetImageMemoryRequirements(m_context->GetDevice(), m_motionImages[i], &memRequirements);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+            memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_motionMemory[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate motion vector image memory");
+        }
+        vkBindImageMemory(m_context->GetDevice(), m_motionImages[i], m_motionMemory[i], 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_motionImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_motionFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_motionImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create motion vector image view");
+        }
+    }
+
+    printf("%zu motion vector resource(s) created (R16G16_SFLOAT).\n", numImages);
+}
+
+void RenderPass::CreateHistoryResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    const size_t kHistoryCount = 2;                 // temporal ping-pong, NOT per-swapchain-image
+
+    m_historyImages.resize(kHistoryCount);
+    m_historyMemory.resize(kHistoryCount);
+    m_historyImageViews.resize(kHistoryCount);
+
+    for (size_t i = 0; i < kHistoryCount; i++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = { extent.width, extent.height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = m_hdrFormat;              // MUST match HDR — feedback loop precision
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // COLOR_ATTACHMENT: resolve renders into it. SAMPLED: next frame reads it as history.
+        // TRANSFER_SRC: we CopyImage the resolved result into the HDR target for tonemap.
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+            | VK_IMAGE_USAGE_SAMPLED_BIT
+            | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_historyImages[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create history image");
+        }
+
+        VkMemoryRequirements memRequirements;
+        vkGetImageMemoryRequirements(m_context->GetDevice(), m_historyImages[i], &memRequirements);
+
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+            memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_historyMemory[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate history image memory");
+        }
+        vkBindImageMemory(m_context->GetDevice(), m_historyImages[i], m_historyMemory[i], 0);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_historyImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_hdrFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_historyImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create history image view");
+        }
+    }
+    printf("%zu history resource(s) created (ping-pong, HDR format).\n", kHistoryCount);
+}
+
 void RenderPass::Cleanup()
 {
     if (!m_context) return;
@@ -177,4 +302,22 @@ void RenderPass::Cleanup()
     m_hdrImages.clear();
     m_hdrImageMemories.clear();
     m_hdrImageViews.clear();
+
+    for (size_t i = 0; i < m_motionImages.size(); i++) {
+        vkDestroyImageView(m_context->GetDevice(), m_motionImageViews[i], nullptr);
+        vkDestroyImage(m_context->GetDevice(), m_motionImages[i], nullptr);
+        vkFreeMemory(m_context->GetDevice(), m_motionMemory[i], nullptr);
+    }
+    m_motionImages.clear();
+    m_motionMemory.clear();
+    m_motionImageViews.clear();
+
+    for (size_t i = 0; i < m_historyImages.size(); i++) {
+        vkDestroyImageView(m_context->GetDevice(), m_historyImageViews[i], nullptr);
+        vkDestroyImage(m_context->GetDevice(), m_historyImages[i], nullptr);
+        vkFreeMemory(m_context->GetDevice(), m_historyMemory[i], nullptr);
+    }
+    m_historyImages.clear();
+    m_historyMemory.clear();
+    m_historyImageViews.clear();
 }

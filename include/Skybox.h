@@ -15,7 +15,7 @@ public:
     ~Skybox();
 
     void Init(VulkanContext& context, GLFWwindow* window, VkFormat colorFormat, VkFormat depthFormat,
-        const char* equirectFilename, uint32_t numImages);
+        const char* equirectFilename, uint32_t numImages, VkFormat motionFormat);
     void Update(uint32_t imageIndex, const glm::mat4& viewProjNoTranslate);
     void Draw(VkCommandBuffer commandBuffer, uint32_t imageIndex) const;
     void Cleanup(VkDevice device);

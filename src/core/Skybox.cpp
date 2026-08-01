@@ -104,7 +104,7 @@ void Skybox::CreatePipeline(VulkanContext& context, GLFWwindow* window, VkFormat
 }
 
 void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorFormat, VkFormat depthFormat,
-    const char* equirectFilename, uint32_t numImages)
+    const char* equirectFilename, uint32_t numImages, VkFormat motionFormat)
 {
     m_device = context.GetDevice();
 
@@ -179,16 +179,18 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
     depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.blendEnable = VK_FALSE;
-    colorBlendAttachment.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendAttachmentState blendAttachments[2]{};
+    for (int i = 0; i < 2; i++) {
+        blendAttachments[i].blendEnable = VK_FALSE;
+        blendAttachments[i].colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount = 2;
+    colorBlending.pAttachments = blendAttachments;
 
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -199,10 +201,11 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
         throw std::runtime_error("Failed to create skybox pipeline layout");
     }
 
+    VkFormat colorFormats[2] = { colorFormat, motionFormat };
     VkPipelineRenderingCreateInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingInfo.colorAttachmentCount = 1;
-    renderingInfo.pColorAttachmentFormats = &colorFormat;
+    renderingInfo.colorAttachmentCount = 2;
+    renderingInfo.pColorAttachmentFormats = colorFormats;
     renderingInfo.depthAttachmentFormat = depthFormat;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};

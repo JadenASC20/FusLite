@@ -284,7 +284,8 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
 
 void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     VkFormat colorFormat, VkFormat depthFormat,
-    VkShaderModule vertShader, VkShaderModule fragShader, uint32_t maxDescriptorSets)
+    VkShaderModule vertShader, VkShaderModule fragShader, 
+    uint32_t maxDescriptorSets, VkFormat motionFormat)
 {
     m_device = context.GetDevice();
 
@@ -360,17 +361,19 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
-    colorBlendAttachment.blendEnable = VK_FALSE;
-    colorBlendAttachment.colorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendAttachmentState blendAttachments[2]{};
+    for (int i = 0; i < 2; i++) {
+        blendAttachments[i].blendEnable = VK_FALSE;
+        blendAttachments[i].colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    }
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 1;
-    colorBlending.pAttachments = &colorBlendAttachment;
+    colorBlending.attachmentCount = 2;
+    colorBlending.pAttachments = blendAttachments;
 
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -389,10 +392,11 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     }
 
     // Dynamic rendering: describe attachment formats instead of using a VkRenderPass
+    VkFormat colorFormats[2] = { colorFormat, motionFormat };
     VkPipelineRenderingCreateInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingInfo.colorAttachmentCount = 1;
-    renderingInfo.pColorAttachmentFormats = &colorFormat;
+    renderingInfo.colorAttachmentCount = 2;
+    renderingInfo.pColorAttachmentFormats = colorFormats;
     renderingInfo.depthAttachmentFormat = depthFormat;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};

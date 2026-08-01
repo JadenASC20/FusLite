@@ -16,7 +16,8 @@ public:
 
     void Init(VulkanContext& context, GLFWwindow* window,
         VkFormat colorFormat, VkFormat depthFormat,
-        VkShaderModule vertShader, VkShaderModule fragShader, uint32_t maxDescriptorSets);
+        VkShaderModule vertShader, VkShaderModule fragShader, 
+        uint32_t maxDescriptorSets, VkFormat motionFormat);
     void Cleanup();
 
     void Bind(VkCommandBuffer commandBuffer) const;
