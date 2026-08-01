@@ -1,8 +1,5 @@
 #version 450
 
-// COMMIT 3 (passthrough) -> COMMIT 4 (blend) -> COMMIT 5 (sign fix).
-// Compile to shaders/taa_resolve.frag.spv
-
 layout(location = 0) in  vec2 uv;
 layout(location = 0) out vec4 outColor;
 
@@ -73,8 +70,24 @@ void main() {
     vec3 boxMin = max(cMin, mean - gamma * sigma);
     vec3 boxMax = min(cMax, mean + gamma * sigma);
 
-    vec3 histYCoCg = clamp(RGBToYCoCg(history), boxMin, boxMax);
-    history = YCoCgToRGB(histYCoCg);
+    vec3 histRaw   = RGBToYCoCg(history);
+    vec3 histClamp = clamp(histRaw, boxMin, boxMax);
+    history = YCoCgToRGB(histClamp);
 
-    outColor = vec4(mix(history, current, pc.blendAlpha), 1.0);
+    // --- Disocclusion confidence (clamp-distance heuristic) ---
+    // How far the history had to be pulled to fit the neighborhood box, measured
+    // on luma (the .x channel) and normalized by the local contrast (sigma.x).
+    // A large pull means the reprojected history disagreed strongly with what's
+    // actually there now -- the classic signature of freshly-revealed geometry.
+    // Where confidence is low we bias the blend toward current, which suppresses
+    // the trailing smear behind moving silhouettes without any depth buffer.
+    float lumaPull   = abs(histRaw.x - histClamp.x);
+    float contrast   = max(sigma.x, 1e-4);
+    float disocclude = clamp(lumaPull / (contrast * 4.0), 0.0, 1.0);
+
+    // Blend alpha rises from its steady-state value toward ~1.0 (current-only)
+    // as disocclusion confidence drops. 0 pull -> untouched; strong pull -> reject.
+    float alpha = mix(pc.blendAlpha, 1.0, disocclude);
+
+    outColor = vec4(mix(history, current, alpha), 1.0);
 }
