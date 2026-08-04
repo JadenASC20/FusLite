@@ -1,6 +1,6 @@
 # FusLite
 
-A physically based real-time renderer built from scratch in **Vulkan 1.3**, with no engine or rendering framework underneath. FusLite implements a modern forward+ rendering pipeline — PBR, image based lighting, clustered light culling, cascaded shadows, and temporal antialiasing — as a study in low-level GPU architecture and real-time rendering technique.
+A physically based real-time renderer built from scratch in **Vulkan 1.3**, with no engine or rendering framework underneath. FusLite implements a modern forward+ rendering pipeline: PBR, image based lighting, clustered light culling, cascaded shadows, and temporal antialiasing — as a study in low-level GPU architecture and real-time rendering technique.
 
 Developed and tested on an **NVIDIA RTX 2070 SUPER**.
 
