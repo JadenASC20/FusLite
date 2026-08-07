@@ -4,8 +4,6 @@ A physically based real-time renderer built from scratch in **Vulkan 1.3**, with
 
 Developed and tested on an **NVIDIA RTX 2070 SUPER**.
 
-> **Status:** Phase 1 complete. The core rendering pipeline is feature-complete and validation-clean. Phase 2 (GPU-driven rendering — see [Roadmap](#roadmap)) is in progress.
-> 
 <img width="1920" height="1120" alt="image" src="https://github.com/user-attachments/assets/bf38b609-68e0-43c1-966b-c9612659a558" />
 
 
@@ -54,10 +52,10 @@ Run the resulting executable from the build directory. Shaders are compiled to S
 
 ## Roadmap
 
-**Phase 1 — Core Rendering Pipeline** ✅ *(complete)*
+**Phase 1 — Core Rendering Pipeline** *(complete)*
 Vulkan 1.3 foundation, PBR + clearcoat, full IBL, clustered Forward+, cascaded shadows with PCSS, TAA, and the ImGui/ImGuizmo debug layer.
 
-**Phase 2 — GPU-Driven Rendering** 🚧 *(in progress)*
+**Phase 2 — GPU-Driven Rendering** *(in progress)*
 A populated urban scene rendered through indirect draw, with GPU-side frustum and occlusion culling — moving draw submission and visibility off the CPU.
 
 Built by **Jaden Halevi** — [portfolio](https://jadenhalevi.design) · [LinkedIn](https://linkedin.com/in/jaden-halevi)
