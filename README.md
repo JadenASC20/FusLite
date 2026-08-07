@@ -1,6 +1,6 @@
 # FusLite
 
-A physically based real-time renderer built from scratch in **Vulkan 1.3**, with no engine or rendering framework underneath. FusLite implements a modern forward+ rendering pipeline: PBR, image based lighting, clustered light culling, cascaded shadows, and temporal antialiasing — as a study in low-level GPU architecture and real-time rendering technique.
+A physically based real-time renderer built from scratch in **Vulkan 1.3**, with no engine or rendering framework underneath. FusLite implements a modern forward+ rendering pipeline: PBR, image based lighting, clustered light culling, cascaded shadows, and temporal antialiasing, as a study in low-level GPU architecture and real-time rendering technique.
 
 Developed and tested on an **NVIDIA RTX 2070 SUPER**.
 
@@ -32,7 +32,7 @@ Developed and tested on an **NVIDIA RTX 2070 SUPER**.
 | **Windowing** | GLFW |
 | **UI** | Dear ImGui (v1.91.9, pinned) + ImGuizmo |
 | **Build** | CMake, Ninja, Visual Studio 2022 |
-| **Shaders** | GLSL → SPIR-V |
+| **Shaders** | GLSL -> SPIR-V |
 | **Reference GPU** | NVIDIA RTX 2070 SUPER |
 
 ---
@@ -52,10 +52,10 @@ Run the resulting executable from the build directory. Shaders are compiled to S
 
 ## Roadmap
 
-**Phase 1 — Core Rendering Pipeline** *(complete)*
+**Phase 1: Core Rendering Pipeline** *(complete)*
 Vulkan 1.3 foundation, PBR + clearcoat, full IBL, clustered Forward+, cascaded shadows with PCSS, TAA, and the ImGui/ImGuizmo debug layer.
 
-**Phase 2 — GPU-Driven Rendering** *(in progress)*
-A populated urban scene rendered through indirect draw, with GPU-side frustum and occlusion culling — moving draw submission and visibility off the CPU.
+**Phase 2: GPU-Driven Rendering** *(in progress)*
+A populated urban scene rendered through indirect draw, with GPU-side frustum and occlusion culling, moving draw submission and visibility off the CPU.
 
 Built by **Jaden Halevi** — [portfolio](https://jadenhalevi.design) · [LinkedIn](https://linkedin.com/in/jaden-halevi)
