@@ -140,8 +140,7 @@ vec3 EvaluateDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, flo
     return (diffuse + specular) * radiance * NdotL;
 }
 
-// Clearcoat layer: a second, much smoother specular lobe on top of the base material.
-// Real clear lacquer has an IOR around 1.5, giving F0 ~0.04 — same as any dielectric.
+// Clearcoat layer: a second, much smoother specular lobe on top of the base material
 const float CLEARCOAT_F0 = 0.04;
 
 float DistributionGGX_Clearcoat(vec3 N, vec3 H, float roughness)
@@ -163,7 +162,7 @@ float Hash(vec2 p)
 }
 
 // Perturbs a normal slightly based on high-frequency noise, simulating
-// small reflective metal/mica flakes embedded in the base coat.
+// small reflective metal/mica flakes embedded in the base coat
 vec3 ApplyFlakeNormal(vec3 N, vec3 tangent, vec3 bitangent, vec2 uv, float flakeScale, float flakeStrength)
 {
     vec2 flakeUV = uv * flakeScale;
@@ -203,7 +202,7 @@ const vec2 POISSON[32] = vec2[](
     vec2( 0.32189312,  0.91832137), vec2(-0.51832197,  0.28193281)
 );
 
-// Stage 1: how far away is whatever is blocking the light?
+// how far away is whatever is blocking the light?
 float FindBlockerDepth(vec2 uv, float currentDepth, float searchRadius, float rotSin, float rotCos)
 {
     float blockerSum = 0.0;
@@ -239,17 +238,17 @@ float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
     float rotSin = sin(angle);
     float rotCos = cos(angle);
 
-    // Stage 1: blocker search
+    // blocker search
     float searchRadius = pc.lightSize * 0.5;
     float avgBlockerDepth = FindBlockerDepth(projCoords.xy, currentDepth - bias, searchRadius, rotSin, rotCos);
     if (avgBlockerDepth < 0.0) return 1.0;
 
-    // Stage 2: penumbra width. The further the receiver is behind the blocker,
-    // the wider the soft region — this ratio is the whole PCSS idea.
+    // penumbra width. The further the receiver is behind the blocker,
+    // the wider the soft region — this ratio is the whole PCSS idea
     float penumbraRatio = (currentDepth - avgBlockerDepth) / max(avgBlockerDepth, 0.0001);
     float filterRadius = clamp(penumbraRatio * pc.lightSize, 0.0005, 0.02);
 
-    // Stage 3: PCF at that computed radius
+    // PCF at that computed radius
     float shadow = 0.0;
     for (int i = 0; i < PCF_SAMPLES; i++) {
         vec2 o = POISSON[i];
@@ -272,7 +271,8 @@ vec3 SampleRamp(float t, int rampIndex)
 }
 
 // Procedural patterns that warp where the ramp transitions, giving the
-// penumbra a dappled, hatched, or halftone edge instead of a clean gradient.
+// penumbra a dappled, hatched, or halftone edge instead of a clean gradient
+
 float PenumbraPattern(int mode, vec2 uv, float scale)
 {
     if (mode == 1) {                                  // noise
@@ -328,14 +328,13 @@ void main() {
     vec3 sunDir = normalize(pc.lightDirAndIntensity.xyz);
     vec3 sunColor = pc.sunColor.rgb * pc.lightDirAndIntensity.w;
 
- 
     float surfaceShadow = ComputeShadow(fragPosWorld, N, sunDir);
     sunColor *= surfaceShadow; // apply shadow to the sun only, for now
 
     ACCUMULATE_LIGHT(sunDir, sunColor)
     vec3 sunLight = totalLight;
 
-    // Determine which cluster this fragment belongs to
+    // Determines which cluster this fragment belongs to
     ivec3 gridDims = ivec3(pc.clusterGridAndScreen.xyz);
     vec2 tileSize = pc.screenSize / vec2(gridDims.xy);
 
@@ -375,8 +374,9 @@ void main() {
         ACCUMULATE_LIGHT(pointL, pointRadiance)
     }
 
-    // Coloured penumbra: retint the sun's contribution as it falls into shadow.
-    // Applied to the sun only, since surfaceShadow describes the sun's occlusion.
+    // Coloured penumbra: retint the sun's contribution as it falls into shadow
+    // Applied to the sun only, since surfaceShadow describes the sun's occlusion
+
     vec3 pointLight = totalLight - sunLight;
 
     float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453);
@@ -387,8 +387,8 @@ void main() {
     int patternMode = int(ubo.penumbraPattern.x);
     if (patternMode > 0) {
         float p = PenumbraPattern(patternMode, fragTexCoord, ubo.penumbraPattern.y);
-        // Mask by the transition band: peaks at penumbraT = 0.5, zero at both ends.
-        // Fully lit and fully shadowed areas are left alone.
+        // Mask by the transition band: peaks at penumbraT = 0.5, zero at both ends
+        // Fully lit and fully shadowed areas are left alone
         float edgeMask = 4.0 * penumbraT * (1.0 - penumbraT);
         penumbraT = clamp(penumbraT + (p - 0.5) * ubo.penumbraParams.w * edgeMask, 0.0, 1.0);
     }
@@ -413,7 +413,7 @@ void main() {
     float avgFc = clamp(clearcoatFactor * 0.5, 0.0, 1.0);
     vec3 outgoing = baseLayer * (1.0 - avgFc) + totalClearcoat;
 
-    // --- IBL ambient ---
+    // IBL ambient
     vec3 R = reflect(-V, N);
     const float MAX_REFLECTION_LOD = 4.0;
 
@@ -437,4 +437,6 @@ void main() {
     vec2 currentNDC = fragClipPos.xy / fragClipPos.w;
     vec2 prevNDC = fragPrevClipPos.xy / fragPrevClipPos.w;
     outMotion = (prevNDC - currentNDC) * 0.5;
+
+
 }

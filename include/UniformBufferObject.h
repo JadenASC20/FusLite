@@ -14,3 +14,12 @@ struct UniformBufferObject
     glm::vec4 penumbraParams;
     glm::vec4 penumbraPattern;
 };
+
+enum ToneMapOperator : int {
+    TM_Reinhard = 0,
+    TM_ReinhardExtended = 1,
+    TM_ACES = 2,
+    TM_AgX = 3,
+    TM_AgXPunchy = 4,
+    TM_GT7 = 5,
+};

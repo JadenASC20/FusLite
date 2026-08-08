@@ -113,7 +113,7 @@ void TonemapPipeline::Init(VulkanContext& context, GLFWwindow* window, VkFormat 
     shaderStages[1].module = fragShader;
     shaderStages[1].pName = "main";
 
-    // No vertex input at all — the fullscreen triangle is generated in the vertex shader
+    // the fullscreen triangle is generated in the vertex shader
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 
@@ -162,11 +162,17 @@ void TonemapPipeline::Init(VulkanContext& context, GLFWwindow* window, VkFormat 
     colorBlending.attachmentCount = 1;
     colorBlending.pAttachments = &colorBlendAttachment;
 
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.offset = 0;
+    pushRange.size = sizeof(int) + sizeof(float);
+
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layoutInfo.setLayoutCount = 1;
     layoutInfo.pSetLayouts = &m_descriptorSetLayout;
-
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
     if (vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create tonemap pipeline layout");
     }
@@ -175,7 +181,6 @@ void TonemapPipeline::Init(VulkanContext& context, GLFWwindow* window, VkFormat 
     renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachmentFormats = &swapchainFormat;
-    // no depth attachment for this pass
 
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -200,11 +205,15 @@ void TonemapPipeline::Init(VulkanContext& context, GLFWwindow* window, VkFormat 
     printf("Tonemap pipeline created.\n");
 }
 
-void TonemapPipeline::Bind(VkCommandBuffer commandBuffer, uint32_t imageIndex) const
+void TonemapPipeline::Bind(VkCommandBuffer commandBuffer, uint32_t imageIndex, int mode, float exposure) const
 {
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
         0, 1, &m_descriptorSets[imageIndex], 0, nullptr);
+
+    struct { int mode; float exposure; } pc{ mode, exposure };
+    vkCmdPushConstants(commandBuffer, m_pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(pc), &pc);
 }
 
 void TonemapPipeline::Cleanup()

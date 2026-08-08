@@ -39,6 +39,7 @@ void main() {
 
     // Unjittered current position, and the same vertex under last frame's
     // transforms. Their screen-space difference is the motion vector.
+
     fragClipPos = ubo.projNoJitter * ubo.view * worldPos;
     fragPrevClipPos = ubo.prevViewProj * ubo.prevModel * vec4(inPosition, 1.0);
 }

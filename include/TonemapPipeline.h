@@ -16,7 +16,7 @@ public:
         const std::vector<VkImageView>& hdrImageViews);
     void Cleanup();
 
-    void Bind(VkCommandBuffer commandBuffer, uint32_t imageIndex) const;
+    void Bind(VkCommandBuffer commandBuffer, uint32_t imageIndex, int mode, float exposure) const;
 
 private:
     void CreateDescriptorSetLayout();
