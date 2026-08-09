@@ -73,6 +73,10 @@ const char* tonemapNames[] = { "Reinhard", "Reinhard Extended", "ACES", "AgX", "
 static bool  g_autoExposureEnabled = true;
 static float g_keyValue = 0.18f;   // middle-grey target
 
+// auto exposure clamp
+static float g_minExposure = 0.25f;
+static float g_maxExposure = 4.0f;   
+
 static float g_currentExposure = 1.0f;      // the smoothed, displayed exposure
 static float g_adaptSpeedUp = 3.0f;       // fast = adapting to a brighter scene
 static float g_adaptSpeedDown = 1.0f;       // slow = adapting to a darker scene
@@ -152,7 +156,8 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     const ShadowMap& shadowMap, const ShadowPipeline& shadowPipeline, const glm::mat4& lightViewProj,
     const Skybox& skybox, const std::vector<Model>& showcaseSpheres,
     const std::vector<SceneObject>& sceneObjects,
-    ImGuiManager& imguiManager, bool showGui, RenderParams params, int tonemapMode, float exposure)
+    ImGuiManager& imguiManager, bool showGui, RenderParams params, int tonemapMode, float exposure,
+    int frameInFlight)
 {
     VkExtent2D extent = swapchain.GetExtent();
     VkImage colorImage = swapchain.GetImages()[imageIndex];
@@ -405,7 +410,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     toBuf.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
     toBuf.imageExtent = { 1, 1, 1 };
     vkCmdCopyImageToBuffer(cmd, lumImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        renderResources.GetLumStagingBuffer(), 1, &toBuf);
+        renderResources.GetLumStagingBuffer(frameInFlight), 1, &toBuf);
 
     // Restore hdrImage to SHADER_READ_ONLY so the tonemap pass reads it unchanged.
     TransitionImage(cmd, hdrImage,
@@ -750,8 +755,17 @@ int main() {
             
             glm::mat4 lightViewProj = ShadowMap::ComputeLightViewProj(g_sunDirection, 15.0f, 0.1f, 100.0f);
             uint32_t imageIndex = context.GetQueue()->AcquireNextImage();
-            
+            int frameInFlight = context.GetQueue()->GetCurrentFrame();
+
+            const uint16_t* px = reinterpret_cast<const uint16_t*>(
+                renderPass.GetLumStagingMapped(frameInFlight));
+            float r = HalfToFloat(px[0]);
+            float g = HalfToFloat(px[1]);
+            float b = HalfToFloat(px[2]);
+            g_measuredLuminance = dot_luma(r, g, b);
+
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
+
                 const SceneObject& o = g_sceneObjects[i];
                 UniformBufferObject objUbo{};
                 objUbo.model = o.transform;
@@ -840,6 +854,8 @@ int main() {
                     ImGui::Checkbox("Auto exposure", &g_autoExposureEnabled);
                     if (g_autoExposureEnabled) {
                         ImGui::SliderFloat("Key value", &g_keyValue, 0.05f, 0.5f, "%.3f");
+                        ImGui::SliderFloat("Min exposure", &g_minExposure, 0.05f, 1.0f, "%.2f");
+                        ImGui::SliderFloat("Max exposure", &g_maxExposure, 1.0f, 16.0f, "%.2f");
                         ImGui::SliderFloat("Adapt speed (bright)", &g_adaptSpeedUp, 0.5f, 8.0f, "%.2f");
                         ImGui::SliderFloat("Adapt speed (dark)", &g_adaptSpeedDown, 0.2f, 8.0f, "%.2f");
                     }
@@ -953,7 +969,7 @@ int main() {
             RecordFrame(commandBuffers[imageIndex], imageIndex, swapchain, renderPass,
                 pipeline, tonemapPipeline, resolvePipeline, histRead, histWrite, firstFrame,
                 shadowMap, shadowPipeline, lightViewProj, skybox, showcaseSpheres, g_sceneObjects,
-                imguiManager, g_showGui, g_renderParams, tonemapMode, g_exposure);
+                imguiManager, g_showGui, g_renderParams, tonemapMode, g_exposure, frameInFlight);
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
                 g_prevModelMatrices[i] = g_sceneObjects[i].transform;
             }
@@ -961,20 +977,12 @@ int main() {
             context.GetQueue()->SubmitAsync(commandBuffers[imageIndex], imageIndex);
             context.GetQueue()->Present(imageIndex);
 
-            // Auto-exposure: wait, decode the 1x1 texel, compute luminance
-            vkDeviceWaitIdle(context.GetDevice());
-            {
-                const uint16_t* px = reinterpret_cast<const uint16_t*>(renderPass.GetLumStagingMapped());
-                float r = HalfToFloat(px[0]);
-                float g = HalfToFloat(px[1]);
-                float b = HalfToFloat(px[2]);
-                g_measuredLuminance = dot_luma(r, g, b);
-            }
-
             // ease toward target with asymmetric temporal adaptation
             if (g_autoExposureEnabled) {
                 float avgLum = std::max(g_measuredLuminance, 1e-4f);
                 float targetExposure = g_keyValue / avgLum;
+                targetExposure = std::clamp(targetExposure, g_minExposure, g_maxExposure);
+
 
                 // faster when brightening (target < current: scene got brighter, exposure drops fast)
                 // slower when darkening (target > current: scene got darker, exposure rises slowly)

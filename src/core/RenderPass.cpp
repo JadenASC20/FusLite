@@ -321,39 +321,42 @@ void RenderPass::CreateLuminanceResources()
     if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_lumImageView) != VK_SUCCESS)
         throw std::runtime_error("Failed to create luminance image view");
 
-    // Host-visible staging buffer, persistently mapped, one HDR texel = 8 bytes.
+    // Host-visible staging buffers, one per frame-in-flight
     VkDeviceSize texelBytes = 8; // R16G16B16A16_SFLOAT
-    VkBufferCreateInfo bufInfo{};
-    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufInfo.size = texelBytes;
-    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (vkCreateBuffer(m_context->GetDevice(), &bufInfo, nullptr, &m_lumStagingBuffer) != VK_SUCCESS)
-        throw std::runtime_error("Failed to create luminance staging buffer");
+    for (int f = 0; f < 2; f++) {
+        VkBufferCreateInfo bufInfo{};
+        bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        bufInfo.size = texelBytes;
+        bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateBuffer(m_context->GetDevice(), &bufInfo, nullptr, &m_lumStagingBuffers[f]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create luminance staging buffer");
 
-    VkMemoryRequirements bufReq;
-    vkGetBufferMemoryRequirements(m_context->GetDevice(), m_lumStagingBuffer, &bufReq);
-    VkMemoryAllocateInfo bufAlloc{};
-    bufAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    bufAlloc.allocationSize = bufReq.size;
-    bufAlloc.memoryTypeIndex = m_context->FindMemoryType(bufReq.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (vkAllocateMemory(m_context->GetDevice(), &bufAlloc, nullptr, &m_lumStagingMemory) != VK_SUCCESS)
-        throw std::runtime_error("Failed to allocate luminance staging memory");
-    vkBindBufferMemory(m_context->GetDevice(), m_lumStagingBuffer, m_lumStagingMemory, 0);
-    vkMapMemory(m_context->GetDevice(), m_lumStagingMemory, 0, texelBytes, 0, &m_lumStagingMapped);
-
+        VkMemoryRequirements bufReq;
+        vkGetBufferMemoryRequirements(m_context->GetDevice(), m_lumStagingBuffers[f], &bufReq);
+        VkMemoryAllocateInfo bufAlloc{};
+        bufAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        bufAlloc.allocationSize = bufReq.size;
+        bufAlloc.memoryTypeIndex = m_context->FindMemoryType(bufReq.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (vkAllocateMemory(m_context->GetDevice(), &bufAlloc, nullptr, &m_lumStagingMemories[f]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to allocate luminance staging memory");
+        vkBindBufferMemory(m_context->GetDevice(), m_lumStagingBuffers[f], m_lumStagingMemories[f], 0);
+        vkMapMemory(m_context->GetDevice(), m_lumStagingMemories[f], 0, texelBytes, 0, &m_lumStagingMapped[f]);
+    }
     printf("Luminance readback resources created (1x1).\n");
 }
 
 void RenderPass::Cleanup()
 {
-    if (m_lumStagingMapped) { vkUnmapMemory(m_context->GetDevice(), m_lumStagingMemory); m_lumStagingMapped = nullptr; }
-    if (m_lumStagingBuffer) vkDestroyBuffer(m_context->GetDevice(), m_lumStagingBuffer, nullptr);
-    if (m_lumStagingMemory) vkFreeMemory(m_context->GetDevice(), m_lumStagingMemory, nullptr);
-    if (m_lumImageView)     vkDestroyImageView(m_context->GetDevice(), m_lumImageView, nullptr);
-    if (m_lumImage)         vkDestroyImage(m_context->GetDevice(), m_lumImage, nullptr);
-    if (m_lumImageMemory)   vkFreeMemory(m_context->GetDevice(), m_lumImageMemory, nullptr);
+    for (int f = 0; f < 2; f++) {
+        if (m_lumStagingMapped[f]) { vkUnmapMemory(m_context->GetDevice(), m_lumStagingMemories[f]); m_lumStagingMapped[f] = nullptr; }
+        if (m_lumStagingBuffers[f]) vkDestroyBuffer(m_context->GetDevice(), m_lumStagingBuffers[f], nullptr);
+        if (m_lumStagingMemories[f]) vkFreeMemory(m_context->GetDevice(), m_lumStagingMemories[f], nullptr);
+    }
+    if (m_lumImageView)   vkDestroyImageView(m_context->GetDevice(), m_lumImageView, nullptr);
+    if (m_lumImage)       vkDestroyImage(m_context->GetDevice(), m_lumImage, nullptr);
+    if (m_lumImageMemory) vkFreeMemory(m_context->GetDevice(), m_lumImageMemory, nullptr);
 
     if (!m_context) return;
 

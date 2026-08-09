@@ -1,6 +1,7 @@
 #pragma once
 #include <volk.h>
 #include <vector>
+#include <VulkanQueue.h>
 
 class VulkanContext;
 class Swapchain;
@@ -31,9 +32,8 @@ public:
     VkFormat GetHistoryFormat() const { return m_hdrFormat; }
 
     VkImage GetLumImage() const { return m_lumImage; }
-    VkImageView GetLumImageView() const { return m_lumImageView; }
-    VkBuffer GetLumStagingBuffer() const { return m_lumStagingBuffer; }
-    void* GetLumStagingMapped() const { return m_lumStagingMapped; }
+    VkBuffer GetLumStagingBuffer(int frame) const { return m_lumStagingBuffers[frame]; }
+    void* GetLumStagingMapped(int frame) const { return m_lumStagingMapped[frame]; }
 
 private:
     void CreateDepthResources(const Swapchain& swapchain);
@@ -63,12 +63,13 @@ private:
     std::vector<VkDeviceMemory> m_historyMemory;
     std::vector<VkImageView> m_historyImageViews;
 
-    // Auto-exposure CP1: 1x1 luminance readback
-    VkImage m_lumImage = VK_NULL_HANDLE;
+    static constexpr int kLumFrames = MAX_FRAMES_IN_FLIGHT;
+    VkImage        m_lumImage = VK_NULL_HANDLE;
     VkDeviceMemory m_lumImageMemory = VK_NULL_HANDLE;
-    VkImageView m_lumImageView = VK_NULL_HANDLE;
-    VkBuffer m_lumStagingBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory m_lumStagingMemory = VK_NULL_HANDLE;
-    void* m_lumStagingMapped = nullptr;
+    VkImageView    m_lumImageView = VK_NULL_HANDLE;
+    VkBuffer       m_lumStagingBuffers[2] = {};
+    VkDeviceMemory m_lumStagingMemories[2] = {};
+    void* m_lumStagingMapped[2] = {};
+
     void CreateLuminanceResources();
 };

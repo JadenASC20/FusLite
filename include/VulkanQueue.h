@@ -20,6 +20,7 @@ public:
 
     // VulkanQueue.h
     VkQueue GetHandle() const { return m_queue; }
+    int GetCurrentFrame() const { return m_currentFrame; }
 
 private:
     VkSemaphore CreateSemaphore();
