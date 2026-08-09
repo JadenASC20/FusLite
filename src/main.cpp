@@ -66,6 +66,8 @@ static int tonemapMode = TM_ACES;
 static float g_exposureEV = 0.0f;
 static float g_exposure = 1.0f;      // exp2(EV)
 
+static float g_measuredLuminance = 0.0f;
+
 const char* tonemapNames[] = { "Reinhard", "Reinhard Extended", "ACES", "AgX", "AgX Punchy", "GT7" };
 
 void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
@@ -84,12 +86,14 @@ void MouseMoveCallback(GLFWwindow* window, double x, double y)
 {
     if (g_camera) g_camera->OnMouseMove(x, y);
 }
+
 void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 {
     if (!ImGuiManager::IsMouseControlledByImGui() && g_camera) {
         g_camera->OnMouseButton(button, action);
     }
 }
+
 void TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
     VkImageAspectFlags aspect, VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
     VkAccessFlags srcAccess, VkAccessFlags dstAccess)
@@ -106,6 +110,35 @@ void TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout
     barrier.dstAccessMask = dstAccess;
     vkCmdPipelineBarrier(cmd, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
+
+
+// HDR Measurement Helpers
+static float HalfToFloat(uint16_t h) {
+    uint32_t sign = (h & 0x8000u) << 16;
+    uint32_t exp = (h & 0x7C00u) >> 10;
+    uint32_t mant = h & 0x03FFu;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) f = sign;
+        else { // subnormal
+            exp = 127 - 15 + 1;
+            while ((mant & 0x0400u) == 0) { mant <<= 1; exp--; }
+            mant &= 0x03FFu;
+            f = sign | (exp << 23) | (mant << 13);
+        }
+    }
+    else if (exp == 0x1F) {
+        f = sign | 0x7F800000u | (mant << 13);
+    }
+    else {
+        f = sign | ((exp - 15 + 127) << 23) | (mant << 13);
+    }
+    float out; memcpy(&out, &f, 4); return out;
+}
+static float dot_luma(float r, float g, float b) {
+    return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+}
+
 void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swapchain,
     const RenderPass& renderResources, const GraphicsPipeline& pipeline, const TonemapPipeline& tonemapPipeline,
     const ResolvePipeline& resolvePipeline, int histRead, int histWrite, bool firstFrame,
@@ -327,7 +360,54 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-    // Pass 2: tonemap HDR -> swapchain (UNCHANGED) 
+    // Auto-exposure: blit resolved HDR down to 1x1, then to staging (blocking readback)
+    // hdrImage is currently SHADER_READ_ONLY (resolve left it there). Take it to TRANSFER_SRC.
+    TransitionImage(cmd, hdrImage,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+    VkImage lumImage = renderResources.GetLumImage();
+    TransitionImage(cmd, lumImage,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        0, VK_ACCESS_TRANSFER_WRITE_BIT);
+
+    VkImageBlit blit{};
+    blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    blit.srcOffsets[0] = { 0, 0, 0 };
+    blit.srcOffsets[1] = { (int32_t)extent.width, (int32_t)extent.height, 1 };
+    blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    blit.dstOffsets[0] = { 0, 0, 0 };
+    blit.dstOffsets[1] = { 1, 1, 1 };
+    vkCmdBlitImage(cmd,
+        hdrImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        lumImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1, &blit, VK_FILTER_LINEAR);
+
+    // lum 1x1 -> staging buffer
+    TransitionImage(cmd, lumImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+    VkBufferImageCopy toBuf{};
+    toBuf.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+    toBuf.imageExtent = { 1, 1, 1 };
+    vkCmdCopyImageToBuffer(cmd, lumImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        renderResources.GetLumStagingBuffer(), 1, &toBuf);
+
+    // Restore hdrImage to SHADER_READ_ONLY so the tonemap pass reads it unchanged.
+    TransitionImage(cmd, hdrImage,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+    // Pass 2: tonemap HDR -> swapchain
     TransitionImage(cmd, colorImage,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_COLOR_BIT,
@@ -565,7 +645,7 @@ int main() {
 
         auto startTime = std::chrono::high_resolution_clock::now();
         float lastFrameTime = 0.0f;
-        static glm::mat4 modelMatrix = glm::mat4(1.0f); // move this OUTSIDE the if(g_showGui) block
+        static glm::mat4 modelMatrix = glm::mat4(1.0f);
         static RenderParams g_renderParams;
         
         g_renderParams.clusterGridAndScreen = glm::vec4(CLUSTER_GRID_X, CLUSTER_GRID_Y, CLUSTER_GRID_Z, 0.0f);
@@ -713,6 +793,7 @@ int main() {
                         glm::value_ptr(g_sceneObjects[g_selectedIndex].transform)
                     );
                 }
+
                 // Window 1: Debug
                 ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
@@ -725,6 +806,7 @@ int main() {
                     frameTimeOffset = (frameTimeOffset + 1) % IM_ARRAYSIZE(frameTimes);
                     ImGui::PlotLines("Frame Time Graph", frameTimes, IM_ARRAYSIZE(frameTimes), frameTimeOffset,
                         nullptr, 0.0f, 33.0f, ImVec2(0, 60));
+                    
                     ImGui::Separator();
                     ImGui::Text("Lighting (Sun)");
                     ImGui::SliderFloat3("Light Dir", &g_sunDirection.x, -1.0f, 1.0f);
@@ -735,6 +817,7 @@ int main() {
                         0, ImVec2(40, 25));
                     ImGui::SameLine();
                     ImGui::SliderFloat("Light Color (K)", &g_sunKelvin, 1000.0f, 12000.0f, "%.0f K");
+                    
                     ImGui::Separator();
                     ImGui::Text("TAA");
                     ImGui::Checkbox("Jitter enabled", &g_taaJitterEnabled);
@@ -744,6 +827,10 @@ int main() {
                     ImGui::Combo("Tonemap", &tonemapMode, tonemapNames, IM_ARRAYSIZE(tonemapNames));
                     ImGui::SliderFloat("Exposure (EV)", &g_exposureEV, -4.0f, 4.0f);
                     g_exposure = exp2(g_exposureEV);
+
+                    ImGui::Separator();
+                    ImGui::Text("Auto-Exposure (CP1)");
+                    ImGui::Text("Measured avg luminance: %.4f", g_measuredLuminance);
                 }
                 ImGui::End();
 
@@ -857,6 +944,16 @@ int main() {
             g_prevViewProj = camera.GetProjectionMatrixNoJitter() * camera.GetViewMatrix();
             context.GetQueue()->SubmitAsync(commandBuffers[imageIndex], imageIndex);
             context.GetQueue()->Present(imageIndex);
+
+            //Auto-exposure: wait, decode the 1x1 texel, compute luminance
+            vkDeviceWaitIdle(context.GetDevice());
+            {
+                const uint16_t* px = reinterpret_cast<const uint16_t*>(renderPass.GetLumStagingMapped());
+                float r = HalfToFloat(px[0]);
+                float g = HalfToFloat(px[1]);
+                float b = HalfToFloat(px[2]);
+                g_measuredLuminance = dot_luma(r, g, b);
+            }
         }
 
         g_camera = nullptr;

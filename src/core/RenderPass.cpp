@@ -15,6 +15,7 @@ void RenderPass::Init(VulkanContext& context, const Swapchain& swapchain)
     CreateHdrResources(swapchain);
     CreateMotionResources(swapchain);
     CreateHistoryResources(swapchain);
+    CreateLuminanceResources();
 }
 
 void RenderPass::CreateDepthResources(const Swapchain& swapchain)
@@ -106,10 +107,11 @@ void RenderPass::CreateHdrResources(const Swapchain& swapchain)
         imageInfo.format = m_hdrFormat;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        // COLOR_ATTACHMENT: the scene renders into it. SAMPLED: the tonemap pass reads it.
-        // COLOR_ATTACHMENT: the scene renders into it. SAMPLED: the tonemap pass reads it.
+
+        // COLOR_ATTACHMENT: the scene renders into it. 
+        // SAMPLED: the tonemap pass reads it.
         // TRANSFER_DST: the TAA resolve copies the resolved result back into it.
-        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -234,11 +236,12 @@ void RenderPass::CreateHistoryResources(const Swapchain& swapchain)
         imageInfo.extent = { extent.width, extent.height, 1 };
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
-        imageInfo.format = m_hdrFormat;              // MUST match HDR — feedback loop precision
+        imageInfo.format = m_hdrFormat;              // MUST match HDR, feedback loop precision
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
         // COLOR_ATTACHMENT: resolve renders into it. SAMPLED: next frame reads it as history.
-        // TRANSFER_SRC: we CopyImage the resolved result into the HDR target for tonemap.
+        // TRANSFER_SRC: CopyImage the resolved result into the HDR target for tonemap.
         imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
             | VK_IMAGE_USAGE_SAMPLED_BIT
             | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -281,8 +284,77 @@ void RenderPass::CreateHistoryResources(const Swapchain& swapchain)
     printf("%zu history resource(s) created (ping-pong, HDR format).\n", kHistoryCount);
 }
 
+void RenderPass::CreateLuminanceResources()
+{
+    // 1x1 image, blit the whole HDR frame down
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent = { 1, 1, 1 };
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = m_hdrFormat;                 // matches HDR for blit compatibility
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_lumImage) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create luminance image");
+
+    VkMemoryRequirements memReq;
+    vkGetImageMemoryRequirements(m_context->GetDevice(), m_lumImage, &memReq);
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = m_context->FindMemoryType(memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_lumImageMemory) != VK_SUCCESS)
+        throw std::runtime_error("Failed to allocate luminance image memory");
+    vkBindImageMemory(m_context->GetDevice(), m_lumImage, m_lumImageMemory, 0);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = m_lumImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = m_hdrFormat;
+    viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+    if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_lumImageView) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create luminance image view");
+
+    // Host-visible staging buffer, persistently mapped, one HDR texel = 8 bytes.
+    VkDeviceSize texelBytes = 8; // R16G16B16A16_SFLOAT
+    VkBufferCreateInfo bufInfo{};
+    bufInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufInfo.size = texelBytes;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(m_context->GetDevice(), &bufInfo, nullptr, &m_lumStagingBuffer) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create luminance staging buffer");
+
+    VkMemoryRequirements bufReq;
+    vkGetBufferMemoryRequirements(m_context->GetDevice(), m_lumStagingBuffer, &bufReq);
+    VkMemoryAllocateInfo bufAlloc{};
+    bufAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    bufAlloc.allocationSize = bufReq.size;
+    bufAlloc.memoryTypeIndex = m_context->FindMemoryType(bufReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(m_context->GetDevice(), &bufAlloc, nullptr, &m_lumStagingMemory) != VK_SUCCESS)
+        throw std::runtime_error("Failed to allocate luminance staging memory");
+    vkBindBufferMemory(m_context->GetDevice(), m_lumStagingBuffer, m_lumStagingMemory, 0);
+    vkMapMemory(m_context->GetDevice(), m_lumStagingMemory, 0, texelBytes, 0, &m_lumStagingMapped);
+
+    printf("Luminance readback resources created (1x1).\n");
+}
+
 void RenderPass::Cleanup()
 {
+    if (m_lumStagingMapped) { vkUnmapMemory(m_context->GetDevice(), m_lumStagingMemory); m_lumStagingMapped = nullptr; }
+    if (m_lumStagingBuffer) vkDestroyBuffer(m_context->GetDevice(), m_lumStagingBuffer, nullptr);
+    if (m_lumStagingMemory) vkFreeMemory(m_context->GetDevice(), m_lumStagingMemory, nullptr);
+    if (m_lumImageView)     vkDestroyImageView(m_context->GetDevice(), m_lumImageView, nullptr);
+    if (m_lumImage)         vkDestroyImage(m_context->GetDevice(), m_lumImage, nullptr);
+    if (m_lumImageMemory)   vkFreeMemory(m_context->GetDevice(), m_lumImageMemory, nullptr);
+
     if (!m_context) return;
 
     for (size_t i = 0; i < m_depthImages.size(); i++) {
@@ -320,4 +392,5 @@ void RenderPass::Cleanup()
     m_historyImages.clear();
     m_historyMemory.clear();
     m_historyImageViews.clear();
+
 }
