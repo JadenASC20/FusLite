@@ -73,6 +73,10 @@ const char* tonemapNames[] = { "Reinhard", "Reinhard Extended", "ACES", "AgX", "
 static bool  g_autoExposureEnabled = true;
 static float g_keyValue = 0.18f;   // middle-grey target
 
+static float g_currentExposure = 1.0f;      // the smoothed, displayed exposure
+static float g_adaptSpeedUp = 3.0f;       // fast = adapting to a brighter scene
+static float g_adaptSpeedDown = 1.0f;       // slow = adapting to a darker scene
+
 void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
@@ -836,6 +840,8 @@ int main() {
                     ImGui::Checkbox("Auto exposure", &g_autoExposureEnabled);
                     if (g_autoExposureEnabled) {
                         ImGui::SliderFloat("Key value", &g_keyValue, 0.05f, 0.5f, "%.3f");
+                        ImGui::SliderFloat("Adapt speed (bright)", &g_adaptSpeedUp, 0.5f, 8.0f, "%.2f");
+                        ImGui::SliderFloat("Adapt speed (dark)", &g_adaptSpeedDown, 0.2f, 8.0f, "%.2f");
                     }
                     else {
                         ImGui::SliderFloat("Exposure (EV)", &g_exposureEV, -4.0f, 4.0f);
@@ -965,10 +971,24 @@ int main() {
                 g_measuredLuminance = dot_luma(r, g, b);
             }
 
-            // convert measured luminance -> exposure (no smoothing yet)
+            // ease toward target with asymmetric temporal adaptation
             if (g_autoExposureEnabled) {
-                float avgLum = std::max(g_measuredLuminance, 1e-4f);  // floor to avoid div-by-zero
-                g_exposure = g_keyValue / avgLum;
+                float avgLum = std::max(g_measuredLuminance, 1e-4f);
+                float targetExposure = g_keyValue / avgLum;
+
+                // faster when brightening (target < current: scene got brighter, exposure drops fast)
+                // slower when darkening (target > current: scene got darker, exposure rises slowly)
+                float rate = (targetExposure < g_currentExposure) ? g_adaptSpeedUp : g_adaptSpeedDown;
+
+                // exponential approach, framerate-independent via dt
+                float t = 1.0f - expf(-rate * deltaTime);
+                g_currentExposure += (targetExposure - g_currentExposure) * t;
+
+                g_exposure = g_currentExposure;
+            }
+            else {
+                // keep the smoothed state in sync so toggling back doesn't jump (manual mode)
+                g_currentExposure = g_exposure;
             }
         }
 
