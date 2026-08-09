@@ -70,6 +70,9 @@ static float g_measuredLuminance = 0.0f;
 
 const char* tonemapNames[] = { "Reinhard", "Reinhard Extended", "ACES", "AgX", "AgX Punchy", "GT7" };
 
+static bool  g_autoExposureEnabled = true;
+static float g_keyValue = 0.18f;   // middle-grey target
+
 void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
@@ -825,12 +828,19 @@ int main() {
                     ImGui::SliderFloat("Blend alpha", &g_taaBlendAlpha, 0.02f, 1.0f, "%.3f");
                     ImGui::Text("Jitter phase: %d/%d", haltonIndex, TAA_JITTER_PHASES);
                     ImGui::Combo("Tonemap", &tonemapMode, tonemapNames, IM_ARRAYSIZE(tonemapNames));
-                    ImGui::SliderFloat("Exposure (EV)", &g_exposureEV, -4.0f, 4.0f);
-                    g_exposure = exp2(g_exposureEV);
-
+                    
                     ImGui::Separator();
-                    ImGui::Text("Auto-Exposure (CP1)");
+                    ImGui::Text("Auto-Exposure");
                     ImGui::Text("Measured avg luminance: %.4f", g_measuredLuminance);
+                    ImGui::Text("Auto exposure value: %.3f", g_exposure);   // debug: watch it
+                    ImGui::Checkbox("Auto exposure", &g_autoExposureEnabled);
+                    if (g_autoExposureEnabled) {
+                        ImGui::SliderFloat("Key value", &g_keyValue, 0.05f, 0.5f, "%.3f");
+                    }
+                    else {
+                        ImGui::SliderFloat("Exposure (EV)", &g_exposureEV, -4.0f, 4.0f);
+                        g_exposure = exp2(g_exposureEV);
+                    }
                 }
                 ImGui::End();
 
@@ -945,7 +955,7 @@ int main() {
             context.GetQueue()->SubmitAsync(commandBuffers[imageIndex], imageIndex);
             context.GetQueue()->Present(imageIndex);
 
-            //Auto-exposure: wait, decode the 1x1 texel, compute luminance
+            // Auto-exposure: wait, decode the 1x1 texel, compute luminance
             vkDeviceWaitIdle(context.GetDevice());
             {
                 const uint16_t* px = reinterpret_cast<const uint16_t*>(renderPass.GetLumStagingMapped());
@@ -953,6 +963,12 @@ int main() {
                 float g = HalfToFloat(px[1]);
                 float b = HalfToFloat(px[2]);
                 g_measuredLuminance = dot_luma(r, g, b);
+            }
+
+            // convert measured luminance -> exposure (no smoothing yet)
+            if (g_autoExposureEnabled) {
+                float avgLum = std::max(g_measuredLuminance, 1e-4f);  // floor to avoid div-by-zero
+                g_exposure = g_keyValue / avgLum;
             }
         }
 
