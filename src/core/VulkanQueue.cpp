@@ -104,7 +104,10 @@ void VulkanQueue::SubmitAsync(VkCommandBuffer commandBuffer, uint32_t imageIndex
     submitInfo.signalSemaphoreCount = 1;
     submitInfo.pSignalSemaphores = &m_renderFinishedSemaphores[imageIndex]; // now per-image
 
-    if (vkQueueSubmit(m_queue, 1, &submitInfo, m_inFlightFences[m_currentFrame]) != VK_SUCCESS) {
+    VkResult sub = vkQueueSubmit(m_queue, 1, &submitInfo, m_inFlightFences[m_currentFrame]);
+    if (sub != VK_SUCCESS) {
+        fprintf(stderr, ">>> vkQueueSubmit FAILED: %d (currentFrame=%d imageIndex=%u)\n",
+            sub, m_currentFrame, imageIndex);
         throw std::runtime_error("Failed to submit command buffer");
     }
 }

@@ -77,6 +77,7 @@ layout(location = 5) in vec4 fragPrevClipPos;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outMotion;
+layout(location = 2) out vec4 outNormal;
 
 const float PI = 3.14159265359;
 
@@ -297,7 +298,7 @@ void main() {
     float clearcoatRoughness = pc.clearcoatRoughness;
 
     vec3 N = normalize(fragNormalWorld);
-
+    vec3 geometricN = N;
     vec3 dPosX = dFdx(fragPosWorld);
     vec3 dPosY = dFdy(fragPosWorld);
     vec3 approxTangent = normalize(dPosX - N * dot(dPosX, N));
@@ -437,6 +438,7 @@ void main() {
     vec2 currentNDC = fragClipPos.xy / fragClipPos.w;
     vec2 prevNDC = fragPrevClipPos.xy / fragPrevClipPos.w;
     outMotion = (prevNDC - currentNDC) * 0.5;
+    outNormal = vec4(geometricN * 0.5 + 0.5, 1.0);
 
 
 }

@@ -30,6 +30,7 @@
 #include <Halton.h>
 #include <imgui.h>
 #include <ImGuizmo.h>
+#include <DebugViewPipeline.h>
 
 #define GLFW_INCLUDE_NONE
 
@@ -69,6 +70,9 @@ static float g_exposure = 1.0f;      // exp2(EV)
 static float g_measuredLuminance = 0.0f;
 
 const char* tonemapNames[] = { "Reinhard", "Reinhard Extended", "ACES", "AgX", "AgX Punchy", "GT7" };
+
+static int g_debugView = 0;  // 0=Off, 1=HDR, 2=Motion, 3=Normal, 4=Depth
+const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth" };
 
 static bool  g_autoExposureEnabled = true;
 static float g_keyValue = 0.18f;   // middle-grey target
@@ -157,19 +161,36 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     const Skybox& skybox, const std::vector<Model>& showcaseSpheres,
     const std::vector<SceneObject>& sceneObjects,
     ImGuiManager& imguiManager, bool showGui, RenderParams params, int tonemapMode, float exposure,
-    int frameInFlight)
+    int frameInFlight, 
+    DebugViewPipeline& debugPipeline, int debugMode)
 {
     VkExtent2D extent = swapchain.GetExtent();
     VkImage colorImage = swapchain.GetImages()[imageIndex];
     VkImageView colorView = swapchain.GetImageViews()[imageIndex];
+    
     VkImageView depthView = renderResources.GetDepthImageViews()[imageIndex];
     VkImage depthImage = renderResources.GetDepthImages()[imageIndex];
+    
     VkImage hdrImage = renderResources.GetHdrImages()[imageIndex];
     VkImageView hdrView = renderResources.GetHdrImageViews()[imageIndex];
+    
     VkImage motionImage = renderResources.GetMotionImages()[imageIndex];
     VkImageView motionView = renderResources.GetMotionImageViews()[imageIndex];
+    
+    VkImage normalImage = renderResources.GetNormalImages()[imageIndex];
+    VkImageView normalView = renderResources.GetNormalImageViews()[imageIndex];
+
     VkImage historyWriteImage = renderResources.GetHistoryImages()[histWrite];
     VkImageView historyWriteView = renderResources.GetHistoryImageViews()[histWrite];
+    
+    VkImageView debugView = VK_NULL_HANDLE;
+    switch (debugMode) {
+        case 1: debugView = hdrView; break;                                        // already SHADER_READ after resolve
+        case 2: debugView = renderResources.GetMotionImageViews()[imageIndex]; break;
+        case 3: debugView = normalView; break;
+        case 4: debugView = depthView; break;   // needs the depth->read barrier
+    }
+
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &beginInfo);
@@ -186,7 +207,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     shadowDepthAttachment.imageView = shadowMap.GetImageView();
     shadowDepthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     shadowDepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    shadowDepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // we need to read it later
+    shadowDepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     shadowDepthAttachment.clearValue.depthStencil = { 1.0f, 0 };
 
     VkRenderingInfo shadowRenderingInfo{};
@@ -226,6 +247,12 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
         0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
+    TransitionImage(cmd, normalImage,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
     TransitionImage(cmd, depthImage,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -245,7 +272,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     depthAttachment.imageView = depthView;
     depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depthAttachment.clearValue.depthStencil = { 1.0f, 0 };
 
     VkRenderingAttachmentInfo motionAttachment{};
@@ -256,12 +283,20 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     motionAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     motionAttachment.clearValue.color = { 0.0f, 0.0f, 0.0f, 0.0f };
 
-    VkRenderingAttachmentInfo sceneAttachments[2] = { hdrColorAttachment, motionAttachment };
+    VkRenderingAttachmentInfo normalAttachment{};
+    normalAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    normalAttachment.imageView = normalView;
+    normalAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    normalAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    normalAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    normalAttachment.clearValue.color = { 0.5f, 0.5f, 1.0f, 1.0f };  // encodes N=(0,0,1)
+
+    VkRenderingAttachmentInfo sceneAttachments[3] = { hdrColorAttachment, motionAttachment, normalAttachment };
     VkRenderingInfo sceneRenderingInfo{};
     sceneRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     sceneRenderingInfo.renderArea = { {0, 0}, extent };
     sceneRenderingInfo.layerCount = 1;
-    sceneRenderingInfo.colorAttachmentCount = 2;
+    sceneRenderingInfo.colorAttachmentCount = 3;
     sceneRenderingInfo.pColorAttachments = sceneAttachments;
     sceneRenderingInfo.pDepthAttachment = &depthAttachment;
     vkCmdBeginRendering(cmd, &sceneRenderingInfo);
@@ -419,6 +454,22 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
 
+    if (debugMode == 3) {
+        TransitionImage(cmd, normalImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+
+    if (debugMode == 4) {
+        TransitionImage(cmd, depthImage,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+
     // Pass 2: tonemap HDR -> swapchain
     TransitionImage(cmd, colorImage,
         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -439,10 +490,24 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     tonemapRenderingInfo.layerCount = 1;
     tonemapRenderingInfo.colorAttachmentCount = 1;
     tonemapRenderingInfo.pColorAttachments = &swapchainAttachment;
-    vkCmdBeginRendering(cmd, &tonemapRenderingInfo);
     
-    tonemapPipeline.Bind(cmd, imageIndex, tonemapMode, exposure);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
+    vkCmdBeginRendering(cmd, &tonemapRenderingInfo);
+    if (debugMode == 0) {
+        tonemapPipeline.Bind(cmd, imageIndex, tonemapMode, exposure);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+    else {
+        // Debug pass replaces tonemap. Dynamic viewport/scissor (pipeline declares them dynamic).
+        VkViewport vpDyn{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
+        VkRect2D scDyn{ {0,0}, extent };
+        vkCmdSetViewport(cmd, 0, 1, &vpDyn);
+        vkCmdSetScissor(cmd, 0, 1, &scDyn);
+        DebugViewPipeline::PushConstants dpc{};
+        dpc.mode = debugMode;
+        dpc.nearZ = 0.1f;   // matches your camera near/far
+        dpc.farZ = 1000.0f;
+        debugPipeline.Bind(cmd, debugView, dpc);
+    }
     vkCmdEndRendering(cmd);
 
     // Pass 3: ImGui overlay, drawn directly onto the swapchain image
@@ -473,7 +538,8 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0);
 
-    vkEndCommandBuffer(cmd);
+    VkResult endRes = vkEndCommandBuffer(cmd);
+    if (endRes != VK_SUCCESS) fprintf(stderr, ">>> vkEndCommandBuffer FAILED: %d\n", endRes);
 }
 int main() {
     if (!glfwInit()) {
@@ -524,7 +590,7 @@ int main() {
         Skybox skybox;
         skybox.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
             "assets/Skybox.hdr", static_cast<uint32_t>(uniformBuffers.size()),
-            renderPass.GetMotionFormat());
+            renderPass.GetMotionFormat(), renderPass.GetNormalFormat());
         VulkanContext::IBLTextures iblTextures = context.CreateIBLFromEquirect("assets/Skybox.hdr");
         
         VkShaderModule vertShader = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/triangle.vert.spv");
@@ -533,7 +599,7 @@ int main() {
         GraphicsPipeline pipeline;
         uint32_t maxDescriptorSets = 32 * static_cast<uint32_t>(uniformBuffers.size());
         pipeline.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
-            vertShader, fragShader, maxDescriptorSets, renderPass.GetMotionFormat());
+            vertShader, fragShader, maxDescriptorSets, renderPass.GetMotionFormat(), renderPass.GetNormalFormat());
         vkDestroyShaderModule(context.GetDevice(), vertShader, nullptr);
         vkDestroyShaderModule(context.GetDevice(), fragShader, nullptr);
         
@@ -584,6 +650,14 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), fullscreenVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), tonemapFrag, nullptr);
         
+        // Debug view pipeline
+        VkShaderModule debugVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
+        VkShaderModule debugFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/debug_view.frag.spv");
+        DebugViewPipeline debugPipeline;
+        debugPipeline.Init(context, swapchain.GetImageFormat(), debugVert, debugFrag);
+        vkDestroyShaderModule(context.GetDevice(), debugVert, nullptr);
+        vkDestroyShaderModule(context.GetDevice(), debugFrag, nullptr);
+
         // TAA resolve pipeline
         VkShaderModule resolveVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
         VkShaderModule resolveFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/taa_resolve.frag.spv");
@@ -863,6 +937,8 @@ int main() {
                         ImGui::SliderFloat("Exposure (EV)", &g_exposureEV, -4.0f, 4.0f);
                         g_exposure = exp2(g_exposureEV);
                     }
+
+                    ImGui::Combo("Debug View", &g_debugView, debugViewNames, IM_ARRAYSIZE(debugViewNames));
                 }
                 ImGui::End();
 
@@ -969,13 +1045,15 @@ int main() {
             RecordFrame(commandBuffers[imageIndex], imageIndex, swapchain, renderPass,
                 pipeline, tonemapPipeline, resolvePipeline, histRead, histWrite, firstFrame,
                 shadowMap, shadowPipeline, lightViewProj, skybox, showcaseSpheres, g_sceneObjects,
-                imguiManager, g_showGui, g_renderParams, tonemapMode, g_exposure, frameInFlight);
+                imguiManager, g_showGui, g_renderParams, tonemapMode, g_exposure, frameInFlight,
+                debugPipeline, g_debugView);
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
                 g_prevModelMatrices[i] = g_sceneObjects[i].transform;
             }
             g_prevViewProj = camera.GetProjectionMatrixNoJitter() * camera.GetViewMatrix();
             context.GetQueue()->SubmitAsync(commandBuffers[imageIndex], imageIndex);
             context.GetQueue()->Present(imageIndex);
+            vkDeviceWaitIdle(context.GetDevice());
 
             // ease toward target with asymmetric temporal adaptation
             if (g_autoExposureEnabled) {
@@ -1015,6 +1093,7 @@ int main() {
 
         resolvePipeline.Cleanup();
         tonemapPipeline.Cleanup();
+        debugPipeline.Cleanup();
         pipeline.Cleanup();
         renderPass.Cleanup();
 

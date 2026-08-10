@@ -18,7 +18,6 @@ public:
     void Present(uint32_t imageIndex);
     void WaitIdle();
 
-    // VulkanQueue.h
     VkQueue GetHandle() const { return m_queue; }
     int GetCurrentFrame() const { return m_currentFrame; }
 

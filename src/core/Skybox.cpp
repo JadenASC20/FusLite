@@ -100,11 +100,11 @@ void Skybox::CreateDescriptorSets(VkDevice device, uint32_t numImages)
 
 void Skybox::CreatePipeline(VulkanContext& context, GLFWwindow* window, VkFormat colorFormat, VkFormat depthFormat)
 {
-    // Shaders are loaded and destroyed by the caller in Init() — see below
+    // Shaders are loaded and destroyed by the caller in Init()
 }
 
 void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorFormat, VkFormat depthFormat,
-    const char* equirectFilename, uint32_t numImages, VkFormat motionFormat)
+    const char* equirectFilename, uint32_t numImages, VkFormat motionFormat, VkFormat normalFormat)
 {
     m_device = context.GetDevice();
 
@@ -118,7 +118,7 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
     CreateDescriptorSetLayout(m_device);
     CreateDescriptorSets(m_device, numImages);
 
-    // --- Pipeline ---
+    // Pipeline
     VkShaderModule vertShader = CreateShaderModuleFromBinary(m_device, "shaders/skybox.vert.spv");
     VkShaderModule fragShader = CreateShaderModuleFromBinary(m_device, "shaders/skybox.frag.spv");
 
@@ -135,7 +135,7 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
 
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    // No vertex buffer — positions are hardcoded in skybox.vert, same trick as fullscreen.vert
+    // No vertex buffer — positions are hardcoded in skybox.vert, (same trick as fullscreen.vert)
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -179,8 +179,8 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
     depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
-    VkPipelineColorBlendAttachmentState blendAttachments[2]{};
-    for (int i = 0; i < 2; i++) {
+    VkPipelineColorBlendAttachmentState blendAttachments[3]{};
+    for (int i = 0; i < 3; i++) {
         blendAttachments[i].blendEnable = VK_FALSE;
         blendAttachments[i].colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -189,7 +189,7 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 2;
+    colorBlending.attachmentCount = 3;
     colorBlending.pAttachments = blendAttachments;
 
     VkPipelineLayoutCreateInfo layoutInfo{};
@@ -201,10 +201,10 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
         throw std::runtime_error("Failed to create skybox pipeline layout");
     }
 
-    VkFormat colorFormats[2] = { colorFormat, motionFormat };
+    VkFormat colorFormats[3] = { colorFormat, motionFormat, normalFormat };
     VkPipelineRenderingCreateInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingInfo.colorAttachmentCount = 2;
+    renderingInfo.colorAttachmentCount = 3;
     renderingInfo.pColorAttachmentFormats = colorFormats;
     renderingInfo.depthAttachmentFormat = depthFormat;
 

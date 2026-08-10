@@ -14,6 +14,7 @@ void RenderPass::Init(VulkanContext& context, const Swapchain& swapchain)
     CreateDepthResources(swapchain);
     CreateHdrResources(swapchain);
     CreateMotionResources(swapchain);
+    CreateNormalResources(swapchain);
     CreateHistoryResources(swapchain);
     CreateLuminanceResources();
 }
@@ -37,7 +38,7 @@ void RenderPass::CreateDepthResources(const Swapchain& swapchain)
         imageInfo.format = m_depthFormat;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -220,6 +221,55 @@ void RenderPass::CreateMotionResources(const Swapchain& swapchain)
     printf("%zu motion vector resource(s) created (R16G16_SFLOAT).\n", numImages);
 }
 
+void RenderPass::CreateNormalResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    size_t numImages = swapchain.GetImageViews().size();
+    m_normalImages.resize(numImages);
+    m_normalMemory.resize(numImages);
+    m_normalImageViews.resize(numImages);
+    for (size_t i = 0; i < numImages; i++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = { extent.width, extent.height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = m_normalFormat;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_normalImages[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create normal G-buffer image");
+        }
+        VkMemoryRequirements memRequirements;
+        vkGetImageMemoryRequirements(m_context->GetDevice(), m_normalImages[i], &memRequirements);
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+            memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_normalMemory[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate normal G-buffer image memory");
+        }
+        vkBindImageMemory(m_context->GetDevice(), m_normalImages[i], m_normalMemory[i], 0);
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_normalImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_normalFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_normalImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create normal G-buffer image view");
+        }
+    }
+    printf("%zu normal G-buffer resource(s) created (R16G16B16A16_SFLOAT).\n", numImages);
+}
+
 void RenderPass::CreateHistoryResources(const Swapchain& swapchain)
 {
     VkExtent2D extent = swapchain.GetExtent();
@@ -387,6 +437,15 @@ void RenderPass::Cleanup()
     m_motionMemory.clear();
     m_motionImageViews.clear();
 
+    for (size_t i = 0; i < m_normalImages.size(); i++) {
+        vkDestroyImageView(m_context->GetDevice(), m_normalImageViews[i], nullptr);
+        vkDestroyImage(m_context->GetDevice(), m_normalImages[i], nullptr);
+        vkFreeMemory(m_context->GetDevice(), m_normalMemory[i], nullptr);
+    }
+    m_normalImages.clear();
+    m_normalMemory.clear();
+    m_normalImageViews.clear();
+
     for (size_t i = 0; i < m_historyImages.size(); i++) {
         vkDestroyImageView(m_context->GetDevice(), m_historyImageViews[i], nullptr);
         vkDestroyImage(m_context->GetDevice(), m_historyImages[i], nullptr);
@@ -395,5 +454,7 @@ void RenderPass::Cleanup()
     m_historyImages.clear();
     m_historyMemory.clear();
     m_historyImageViews.clear();
+
+
 
 }
