@@ -50,12 +50,6 @@ cmake --build build
 
 Run the resulting executable from the build directory. Shaders are compiled to SPIR-V as part of the build.
 
-## Roadmap
-
-**Phase 1: Core Rendering Pipeline** *(complete)*
-Vulkan 1.3 foundation, PBR + clearcoat, full IBL, clustered Forward+, cascaded shadows with PCSS, TAA, and the ImGui/ImGuizmo debug layer.
-
-**Phase 2: GPU-Driven Rendering** *(in progress)*
-A populated urban scene rendered through indirect draw, with GPU-side frustum and occlusion culling, moving draw submission and visibility off the CPU.
+## Footer
 
 Built by **Jaden Halevi** — [portfolio](https://jadenhalevi.design) · [LinkedIn](https://linkedin.com/in/jaden-halevi)
