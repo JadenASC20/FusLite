@@ -31,6 +31,7 @@
 #include <imgui.h>
 #include <ImGuizmo.h>
 #include <DebugViewPipeline.h>
+#include <SSRPipeline.h>
 
 #define GLFW_INCLUDE_NONE
 
@@ -72,7 +73,6 @@ static float g_measuredLuminance = 0.0f;
 const char* tonemapNames[] = { "Reinhard", "Reinhard Extended", "ACES", "AgX", "AgX Punchy", "GT7" };
 
 static int g_debugView = 0;  // 0=Off, 1=HDR, 2=Motion, 3=Normal, 4=Depth
-const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth" };
 
 static bool  g_autoExposureEnabled = true;
 static float g_keyValue = 0.18f;   // middle-grey target
@@ -84,6 +84,14 @@ static float g_maxExposure = 4.0f;
 static float g_currentExposure = 1.0f;      // the smoothed, displayed exposure
 static float g_adaptSpeedUp = 3.0f;       // fast = adapting to a brighter scene
 static float g_adaptSpeedDown = 1.0f;       // slow = adapting to a darker scene
+
+static bool  g_ssrEnabled = true;
+static float g_ssrReflectivity = 0.6f;
+static int   g_ssrMaxSteps = 64;
+static float g_ssrStepSize = 0.25f;
+static float g_ssrThickness = 0.5f;
+
+const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth", "SSR" };
 
 void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
@@ -162,8 +170,11 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     const std::vector<SceneObject>& sceneObjects,
     ImGuiManager& imguiManager, bool showGui, RenderParams params, int tonemapMode, float exposure,
     int frameInFlight, 
-    DebugViewPipeline& debugPipeline, int debugMode)
+    DebugViewPipeline& debugPipeline, int debugMode,
+    const SSRPipeline& ssrPipeline, const Camera& camera,
+    bool ssrEnabled, float ssrReflectivity, int ssrMaxSteps, float ssrStepSize, float ssrThickness)
 {
+
     VkExtent2D extent = swapchain.GetExtent();
     VkImage colorImage = swapchain.GetImages()[imageIndex];
     VkImageView colorView = swapchain.GetImageViews()[imageIndex];
@@ -182,13 +193,20 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
 
     VkImage historyWriteImage = renderResources.GetHistoryImages()[histWrite];
     VkImageView historyWriteView = renderResources.GetHistoryImageViews()[histWrite];
-    
+
+    VkImage ssrImage = renderResources.GetSSRImages()[imageIndex];
+    VkImageView ssrView = renderResources.GetSSRImageViews()[imageIndex];
+
+    VkImage compositeImage = renderResources.GetCompositeImages()[imageIndex];
+    VkImageView compositeView = renderResources.GetCompositeImageViews()[imageIndex];
+
     VkImageView debugView = VK_NULL_HANDLE;
     switch (debugMode) {
         case 1: debugView = hdrView; break;                                        // already SHADER_READ after resolve
         case 2: debugView = renderResources.GetMotionImageViews()[imageIndex]; break;
         case 3: debugView = normalView; break;
         case 4: debugView = depthView; break;   // needs the depth->read barrier
+        case 5: debugView = ssrView; break;
     }
 
     VkCommandBufferBeginInfo beginInfo{};
@@ -225,6 +243,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         shadowPipeline.PushConstants(cmd, spc);
         showcaseSpheres[i].DrawGeometryOnly(cmd);
     }
+
     vkCmdEndRendering(cmd);
 
     // Transition shadow map for shader reading in the main pass
@@ -318,19 +337,114 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         pipeline.PushParams(cmd, params);
         showcaseSpheres[i].Draw(cmd, pipeline.GetLayout(), imageIndex);
     }
+
     vkCmdEndRendering(cmd);
+
+    // ===== CP1 SSR: scene outputs (HDR, depth, normal) -> shader read; march; write SSR target =====
+    {
+        VkViewport vpD{ 0,0,(float)extent.width,(float)extent.height,0,1 };
+        VkRect2D   scD{ {0,0}, extent };
+
+        // Inputs -> shader read
+        TransitionImage(cmd, hdrImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        TransitionImage(cmd, normalImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        TransitionImage(cmd, depthImage,
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+        // SSR target -> color attachment
+        TransitionImage(cmd, ssrImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
+        VkRenderingAttachmentInfo ssrAtt{};
+        ssrAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        ssrAtt.imageView = ssrView;
+        ssrAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ssrAtt.loadOp = ssrEnabled ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        ssrAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        ssrAtt.clearValue.color = { 0.0f, 0.0f, 0.0f, 0.0f };
+        VkRenderingInfo ssrRI{};
+        ssrRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        ssrRI.renderArea = { {0,0}, extent };
+        ssrRI.layerCount = 1; ssrRI.colorAttachmentCount = 1; ssrRI.pColorAttachments = &ssrAtt;
+
+        vkCmdBeginRendering(cmd, &ssrRI);
+        if (ssrEnabled) {
+            vkCmdSetViewport(cmd, 0, 1, &vpD);
+            vkCmdSetScissor(cmd, 0, 1, &scD);
+            SSRPipeline::SSRPush sp{};
+            glm::mat4 projNJ = camera.GetProjectionMatrixNoJitter();
+            glm::mat4 viewM = camera.GetViewMatrix();
+            sp.invProj = glm::inverse(projNJ);
+            sp.view = viewM; sp.proj = projNJ;
+            sp.screenSize = glm::vec2((float)extent.width, (float)extent.height);
+            sp.nearZ = 0.1f; sp.farZ = 1000.0f;
+            sp.maxSteps = ssrMaxSteps; sp.stepSize = ssrStepSize; sp.thickness = ssrThickness;
+            ssrPipeline.BindSSR(cmd, imageIndex, sp);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        }
+        vkCmdEndRendering(cmd);
+
+        // SSR target -> shader read
+        TransitionImage(cmd, ssrImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+        // Composite: HDR(read) + SSR(read) -> composite target
+        TransitionImage(cmd, compositeImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        VkRenderingAttachmentInfo compAtt{};
+        compAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        compAtt.imageView = compositeView;
+        compAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        compAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        compAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        VkRenderingInfo compRI{};
+        compRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        compRI.renderArea = { {0,0}, extent };
+        compRI.layerCount = 1; compRI.colorAttachmentCount = 1; compRI.pColorAttachments = &compAtt;
+
+        vkCmdBeginRendering(cmd, &compRI);
+        vkCmdSetViewport(cmd, 0, 1, &vpD);
+        vkCmdSetScissor(cmd, 0, 1, &scD);
+        SSRPipeline::CompPush cpc{};
+        cpc.reflectivity = ssrReflectivity;
+        ssrPipeline.BindComposite(cmd, imageIndex, cpc);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
+
+        // Composite -> shader read (resolve reads it)
+        TransitionImage(cmd, compositeImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
+    // HDR is now SHADER_READ; normal/depth are SHADER_READ. Resolve reads COMPOSITE.
 
     // Reads current HDR + motion + history[histRead], writes history[histWrite],
     // then copies the resolved result back into hdrImage so the (unchanged)
     // tonemap pass keeps reading HDR.
     // 
     // current HDR + motion: color attachment -> shader read (resolve samples them)
-
-    TransitionImage(cmd, hdrImage,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
     TransitionImage(cmd, motionImage,
         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -541,6 +655,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     VkResult endRes = vkEndCommandBuffer(cmd);
     if (endRes != VK_SUCCESS) fprintf(stderr, ">>> vkEndCommandBuffer FAILED: %d\n", endRes);
 }
+
 int main() {
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
@@ -658,13 +773,25 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), debugVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), debugFrag, nullptr);
 
+        VkShaderModule ssrVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
+        VkShaderModule ssrFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/ssr.frag.spv");
+        VkShaderModule compFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/composite.frag.spv");
+        SSRPipeline ssrPipeline;
+        ssrPipeline.Init(context, renderPass.GetSSRFormat(), renderPass.GetHdrFormat(),
+            ssrVert, ssrFrag, compFrag,
+            renderPass.GetHdrImageViews(), renderPass.GetDepthImageViews(),
+            renderPass.GetNormalImageViews(), renderPass.GetSSRImageViews());
+        vkDestroyShaderModule(context.GetDevice(), ssrVert, nullptr);
+        vkDestroyShaderModule(context.GetDevice(), ssrFrag, nullptr);
+        vkDestroyShaderModule(context.GetDevice(), compFrag, nullptr);
+
         // TAA resolve pipeline
         VkShaderModule resolveVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
         VkShaderModule resolveFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/taa_resolve.frag.spv");
         ResolvePipeline resolvePipeline;
         resolvePipeline.Init(context, window, renderPass.GetHdrFormat(),
             resolveVert, resolveFrag,
-            renderPass.GetHdrImageViews(), renderPass.GetMotionImageViews(),
+            renderPass.GetCompositeImageViews(), renderPass.GetMotionImageViews(),
             renderPass.GetHistoryImageViews());
         vkDestroyShaderModule(context.GetDevice(), resolveVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), resolveFrag, nullptr);
@@ -939,6 +1066,14 @@ int main() {
                     }
 
                     ImGui::Combo("Debug View", &g_debugView, debugViewNames, IM_ARRAYSIZE(debugViewNames));
+                
+                    ImGui::Separator();
+                    ImGui::Text("SSR (CP1 mirror)");
+                    ImGui::Checkbox("SSR enabled", &g_ssrEnabled);
+                    ImGui::SliderFloat("Reflectivity", &g_ssrReflectivity, 0.0f, 1.0f);
+                    ImGui::SliderInt("Max steps", &g_ssrMaxSteps, 8, 256);
+                    ImGui::SliderFloat("Step size", &g_ssrStepSize, 0.02f, 1.0f, "%.3f");
+                    ImGui::SliderFloat("Thickness", &g_ssrThickness, 0.05f, 2.0f, "%.3f");
                 }
                 ImGui::End();
 
@@ -1046,14 +1181,15 @@ int main() {
                 pipeline, tonemapPipeline, resolvePipeline, histRead, histWrite, firstFrame,
                 shadowMap, shadowPipeline, lightViewProj, skybox, showcaseSpheres, g_sceneObjects,
                 imguiManager, g_showGui, g_renderParams, tonemapMode, g_exposure, frameInFlight,
-                debugPipeline, g_debugView);
+                debugPipeline, g_debugView, ssrPipeline, camera, g_ssrEnabled, g_ssrReflectivity, g_ssrMaxSteps, g_ssrStepSize, g_ssrThickness);
+            
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
                 g_prevModelMatrices[i] = g_sceneObjects[i].transform;
             }
+            
             g_prevViewProj = camera.GetProjectionMatrixNoJitter() * camera.GetViewMatrix();
             context.GetQueue()->SubmitAsync(commandBuffers[imageIndex], imageIndex);
             context.GetQueue()->Present(imageIndex);
-            vkDeviceWaitIdle(context.GetDevice());
 
             // ease toward target with asymmetric temporal adaptation
             if (g_autoExposureEnabled) {

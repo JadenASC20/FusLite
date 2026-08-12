@@ -15,6 +15,8 @@ void RenderPass::Init(VulkanContext& context, const Swapchain& swapchain)
     CreateHdrResources(swapchain);
     CreateMotionResources(swapchain);
     CreateNormalResources(swapchain);
+    CreateSSRResources(swapchain);
+    CreateCompositeResources(swapchain);
     CreateHistoryResources(swapchain);
     CreateLuminanceResources();
 }
@@ -397,6 +399,98 @@ void RenderPass::CreateLuminanceResources()
     printf("Luminance readback resources created (1x1).\n");
 }
 
+void RenderPass::CreateSSRResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    size_t numImages = swapchain.GetImageViews().size();
+    m_ssrImages.resize(numImages);
+    m_ssrMemory.resize(numImages);
+    m_ssrImageViews.resize(numImages);
+    for (size_t i = 0; i < numImages; i++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = { extent.width, extent.height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = m_ssrFormat;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_ssrImages[i]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create SSR image");
+        VkMemoryRequirements memReq;
+        vkGetImageMemoryRequirements(m_context->GetDevice(), m_ssrImages[i], &memReq);
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+            memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_ssrMemory[i]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to allocate SSR image memory");
+        vkBindImageMemory(m_context->GetDevice(), m_ssrImages[i], m_ssrMemory[i], 0);
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_ssrImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_ssrFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_ssrImageViews[i]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create SSR image view");
+    }
+    printf("%zu SSR resource(s) created.\n", numImages);
+}
+
+void RenderPass::CreateCompositeResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    size_t numImages = swapchain.GetImageViews().size();
+    m_compositeImages.resize(numImages);
+    m_compositeMemory.resize(numImages);
+    m_compositeImageViews.resize(numImages);
+    for (size_t i = 0; i < numImages; i++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = { extent.width, extent.height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = m_compositeFormat;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_compositeImages[i]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create composite image");
+        VkMemoryRequirements memReq;
+        vkGetImageMemoryRequirements(m_context->GetDevice(), m_compositeImages[i], &memReq);
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+            memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_compositeMemory[i]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to allocate composite image memory");
+        vkBindImageMemory(m_context->GetDevice(), m_compositeImages[i], m_compositeMemory[i], 0);
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_compositeImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_compositeFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_compositeImageViews[i]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create composite image view");
+    }
+    printf("%zu composite resource(s) created.\n", numImages);
+}
+
 void RenderPass::Cleanup()
 {
     for (int f = 0; f < 2; f++) {
@@ -455,6 +549,22 @@ void RenderPass::Cleanup()
     m_historyMemory.clear();
     m_historyImageViews.clear();
 
+    for (size_t i = 0; i < m_ssrImages.size(); i++) {
+        vkDestroyImageView(m_context->GetDevice(), m_ssrImageViews[i], nullptr);
+        vkDestroyImage(m_context->GetDevice(), m_ssrImages[i], nullptr);
+        vkFreeMemory(m_context->GetDevice(), m_ssrMemory[i], nullptr);
+    }
+    m_ssrImages.clear(); 
+    m_ssrMemory.clear(); 
+    m_ssrImageViews.clear();
 
+    for (size_t i = 0; i < m_compositeImages.size(); i++) {
+        vkDestroyImageView(m_context->GetDevice(), m_compositeImageViews[i], nullptr);
+        vkDestroyImage(m_context->GetDevice(), m_compositeImages[i], nullptr);
+        vkFreeMemory(m_context->GetDevice(), m_compositeMemory[i], nullptr);
+    }
+    m_compositeImages.clear(); 
+    m_compositeMemory.clear(); 
+    m_compositeImageViews.clear();
 
 }

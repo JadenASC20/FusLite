@@ -39,12 +39,23 @@ public:
     VkBuffer GetLumStagingBuffer(int frame) const { return m_lumStagingBuffers[frame]; }
     void* GetLumStagingMapped(int frame) const { return m_lumStagingMapped[frame]; }
 
+    const std::vector<VkImage>& GetSSRImages() const { return m_ssrImages; }
+    const std::vector<VkImageView>& GetSSRImageViews() const { return m_ssrImageViews; }
+    VkFormat GetSSRFormat() const { return m_ssrFormat; }
+
+    const std::vector<VkImage>& GetCompositeImages() const { return m_compositeImages; }
+    const std::vector<VkImageView>& GetCompositeImageViews() const { return m_compositeImageViews; }
+    VkFormat GetCompositeFormat() const { return m_compositeFormat; }
+
 private:
     void CreateDepthResources(const Swapchain& swapchain);
     void CreateHdrResources(const Swapchain& swapchain);
     void CreateMotionResources(const Swapchain& swapchain);
     void CreateNormalResources(const Swapchain& swapchain);
     void CreateHistoryResources(const Swapchain& swapchain);
+    void CreateLuminanceResources();
+    void CreateSSRResources(const Swapchain& swapchain);
+    void CreateCompositeResources(const Swapchain& swapchain);
 
     VulkanContext* m_context = nullptr;
 
@@ -81,5 +92,13 @@ private:
     VkDeviceMemory m_lumStagingMemories[2] = {};
     void* m_lumStagingMapped[2] = {};
 
-    void CreateLuminanceResources();
+    VkFormat m_ssrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    std::vector<VkImage> m_ssrImages;
+    std::vector<VkDeviceMemory> m_ssrMemory;
+    std::vector<VkImageView> m_ssrImageViews;
+
+    VkFormat m_compositeFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    std::vector<VkImage> m_compositeImages;
+    std::vector<VkDeviceMemory> m_compositeMemory;
+    std::vector<VkImageView> m_compositeImageViews;
 };

@@ -83,6 +83,7 @@ add_executable(FusLite
     src/core/ShadowPipeline.cpp
     src/core/ShadowMap.cpp
     src/core/DebugViewPipeline.cpp
+    src/core/SSRPipeline.cpp
 
 
     # ImGui core
