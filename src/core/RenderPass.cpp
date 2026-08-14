@@ -2,6 +2,7 @@
 #include "VulkanContext.h"
 #include "Swapchain.h"
 #include <stdexcept>
+#include <algorithm>
 #include <cstdio>
 
 RenderPass::RenderPass() {}
@@ -17,6 +18,7 @@ void RenderPass::Init(VulkanContext& context, const Swapchain& swapchain)
     CreateNormalResources(swapchain);
     CreateSSRResources(swapchain);
     CreateCompositeResources(swapchain);
+    CreateHiZResources(swapchain);
     CreateHistoryResources(swapchain);
     CreateLuminanceResources();
 }
@@ -491,6 +493,71 @@ void RenderPass::CreateCompositeResources(const Swapchain& swapchain)
     printf("%zu composite resource(s) created.\n", numImages);
 }
 
+void RenderPass::CreateHiZResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    m_hizBaseExtent = extent;
+
+    // Full mip chain down to 1x1
+    uint32_t maxDim = std::max(extent.width, extent.height);
+    m_hizMipLevels = 1;
+    while ((maxDim >> (m_hizMipLevels - 1)) > 1) m_hizMipLevels++;
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent = { extent.width, extent.height, 1 };
+    imageInfo.mipLevels = m_hizMipLevels;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = m_hizFormat;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    // STORAGE: compute writes each mip. SAMPLED: the march + debug view read it
+    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_hizImage) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create Hi-Z image");
+
+    VkMemoryRequirements memReq;
+    vkGetImageMemoryRequirements(m_context->GetDevice(), m_hizImage, &memReq);
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+        memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_hizMemory) != VK_SUCCESS)
+        throw std::runtime_error("Failed to allocate Hi-Z memory");
+    vkBindImageMemory(m_context->GetDevice(), m_hizImage, m_hizMemory, 0);
+
+    // Full-chain sample view (all mips), for the march + debug view
+    VkImageViewCreateInfo sv{};
+    sv.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    sv.image = m_hizImage;
+    sv.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    sv.format = m_hizFormat;
+    sv.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, m_hizMipLevels, 0, 1 };
+    if (vkCreateImageView(m_context->GetDevice(), &sv, nullptr, &m_hizSampleView) != VK_SUCCESS)
+        throw std::runtime_error("Failed to create Hi-Z sample view");
+
+    // Per-mip views — each views exactly one mip level, for storage-image writes
+    m_hizMipViews.resize(m_hizMipLevels);
+    for (uint32_t m = 0; m < m_hizMipLevels; m++) {
+        VkImageViewCreateInfo mv{};
+        mv.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        mv.image = m_hizImage;
+        mv.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        mv.format = m_hizFormat;
+        mv.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, m, 1, 0, 1 };
+        if (vkCreateImageView(m_context->GetDevice(), &mv, nullptr, &m_hizMipViews[m]) != VK_SUCCESS)
+            throw std::runtime_error("Failed to create Hi-Z mip view");
+    }
+    printf("Hi-Z sample view: %p\n", (void*)m_hizSampleView);
+    printf("Hi-Z pyramid created (%ux%u, %u mips, R32G32_SFLOAT).\n",
+        extent.width, extent.height, m_hizMipLevels);
+}
+
 void RenderPass::Cleanup()
 {
     for (int f = 0; f < 2; f++) {
@@ -566,5 +633,11 @@ void RenderPass::Cleanup()
     m_compositeImages.clear(); 
     m_compositeMemory.clear(); 
     m_compositeImageViews.clear();
+
+    for (auto v : m_hizMipViews) vkDestroyImageView(m_context->GetDevice(), v, nullptr);
+    m_hizMipViews.clear();
+    if (m_hizSampleView) vkDestroyImageView(m_context->GetDevice(), m_hizSampleView, nullptr);
+    if (m_hizImage) vkDestroyImage(m_context->GetDevice(), m_hizImage, nullptr);
+    if (m_hizMemory) vkFreeMemory(m_context->GetDevice(), m_hizMemory, nullptr);
 
 }

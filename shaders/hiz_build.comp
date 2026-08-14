@@ -1,0 +1,51 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Source: mode 0 = scene depth (sampler2D, nonlinear); mode 1 = previous Hi-Z mip (sampler2D, RG=min/max)
+layout(binding = 0) uniform sampler2D srcTex;
+// Destination: this mip level, as a storage image (RG32F).
+layout(binding = 1, rg32f) uniform writeonly image2D dstMip;
+
+layout(push_constant) uniform HiZPush {
+    ivec2 dstSize;   // width,height of the destination mip
+    int   mode;      // 0 = linearize depth into mip0; 1 = downsample min/max
+    float nearZ;
+    float farZ;
+    float _pad0;
+    float _pad1;
+    float _pad2;
+} pc;
+
+// Vulkan reverse? No — standard [0,1] nonlinear depth. Linearize to positive view-space distance.
+float LinearizeDepth(float d)
+{
+    // d in [0,1] NDC z. Returns positive linear eye distance.
+    // For a standard perspective proj with near/far:
+    return (2.0 * pc.nearZ * pc.farZ) / (pc.farZ + pc.nearZ - d * (pc.farZ - pc.nearZ));
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= pc.dstSize.x || p.y >= pc.dstSize.y) return;
+
+    if (pc.mode == 0) {
+        // Sample the scene depth at this destination texel's center.
+        vec2 uv = (vec2(p) + 0.5) / vec2(pc.dstSize);
+        float d = texture(srcTex, uv).r;
+        float lin = (d >= 1.0) ? pc.farZ : LinearizeDepth(d);  // far/sky clamps to farZ
+        imageStore(dstMip, p, vec4(lin, lin, 0.0, 0.0));       // min == max at mip 0
+    } else {
+        // Gather the 2x2 block from the previous mip (which is 2x the size).
+        // Use texelFetch on the previous mip via textureLod on srcTex.
+        vec2 srcTexel = 1.0 / vec2(textureSize(srcTex, 0));
+        vec2 baseUV = (vec2(p) * 2.0 + 0.5) * srcTexel;
+        vec2 s0 = texture(srcTex, baseUV + vec2(0.0, 0.0)).rg;
+        vec2 s1 = texture(srcTex, baseUV + vec2(srcTexel.x, 0.0)).rg;
+        vec2 s2 = texture(srcTex, baseUV + vec2(0.0, srcTexel.y)).rg;
+        vec2 s3 = texture(srcTex, baseUV + vec2(srcTexel.x, srcTexel.y)).rg;
+        float mn = min(min(s0.x, s1.x), min(s2.x, s3.x));
+        float mx = max(max(s0.y, s1.y), max(s2.y, s3.y));
+        imageStore(dstMip, p, vec4(mn, mx, 0.0, 0.0));
+    }
+}

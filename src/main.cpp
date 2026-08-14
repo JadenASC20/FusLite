@@ -32,6 +32,8 @@
 #include <ImGuizmo.h>
 #include <DebugViewPipeline.h>
 #include <SSRPipeline.h>
+#include <HiZPipeline.h>
+
 
 #define GLFW_INCLUDE_NONE
 
@@ -172,7 +174,8 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     int frameInFlight, 
     DebugViewPipeline& debugPipeline, int debugMode,
     const SSRPipeline& ssrPipeline, const Camera& camera,
-    bool ssrEnabled, float ssrReflectivity, int ssrMaxSteps, float ssrStepSize, float ssrThickness)
+    bool ssrEnabled, float ssrReflectivity, int ssrMaxSteps, float ssrStepSize, float ssrThickness, 
+    const HiZPipeline& hizPipeline)
 {
 
     VkExtent2D extent = swapchain.GetExtent();
@@ -340,10 +343,10 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
 
     vkCmdEndRendering(cmd);
 
-    // ===== CP1 SSR: scene outputs (HDR, depth, normal) -> shader read; march; write SSR target =====
+    // SSR: scene outputs (HDR, depth, normal) -> shader read; march; write SSR target
     {
         VkViewport vpD{ 0,0,(float)extent.width,(float)extent.height,0,1 };
-        VkRect2D   scD{ {0,0}, extent };
+        VkRect2D scD{ {0,0}, extent };
 
         // Inputs -> shader read
         TransitionImage(cmd, hdrImage,
@@ -361,6 +364,11 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
             VK_IMAGE_ASPECT_DEPTH_BIT,
             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+
+        hizPipeline.Build(cmd, imageIndex, renderResources.GetHiZImage(),
+            renderResources.GetHiZBaseExtent(),
+            renderResources.GetHiZMipLevels(),
+            0.1f, 1000.0f);
 
         // SSR target -> color attachment
         TransitionImage(cmd, ssrImage,
@@ -392,7 +400,10 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
             sp.view = viewM; sp.proj = projNJ;
             sp.screenSize = glm::vec2((float)extent.width, (float)extent.height);
             sp.nearZ = 0.1f; sp.farZ = 1000.0f;
-            sp.maxSteps = ssrMaxSteps; sp.stepSize = ssrStepSize; sp.thickness = ssrThickness;
+            sp.maxSteps = ssrMaxSteps; 
+            sp.stepSize = ssrStepSize; 
+            sp.thickness = ssrThickness;
+            sp.hizMipCount = (int)renderResources.GetHiZMipLevels();
             ssrPipeline.BindSSR(cmd, imageIndex, sp);
             vkCmdDraw(cmd, 3, 1, 0, 0);
         }
@@ -777,10 +788,12 @@ int main() {
         VkShaderModule ssrFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/ssr.frag.spv");
         VkShaderModule compFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/composite.frag.spv");
         SSRPipeline ssrPipeline;
+        printf("Passing Hi-Z view to SSR: %p\n", (void*)renderPass.GetHiZSampleView());
         ssrPipeline.Init(context, renderPass.GetSSRFormat(), renderPass.GetHdrFormat(),
             ssrVert, ssrFrag, compFrag,
             renderPass.GetHdrImageViews(), renderPass.GetDepthImageViews(),
-            renderPass.GetNormalImageViews(), renderPass.GetSSRImageViews());
+            renderPass.GetNormalImageViews(), renderPass.GetSSRImageViews(), 
+            renderPass.GetHiZSampleView());
         vkDestroyShaderModule(context.GetDevice(), ssrVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), ssrFrag, nullptr);
         vkDestroyShaderModule(context.GetDevice(), compFrag, nullptr);
@@ -795,7 +808,28 @@ int main() {
             renderPass.GetHistoryImageViews());
         vkDestroyShaderModule(context.GetDevice(), resolveVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), resolveFrag, nullptr);
-        
+
+        // Nearest-clamp sampler for Hi-Z (depth + mip sampling; nearest = no depth interpolation)
+        VkSampler hizSampler;
+        {
+            VkSamplerCreateInfo s{};
+            s.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            s.magFilter = VK_FILTER_NEAREST; s.minFilter = VK_FILTER_NEAREST;
+            s.addressModeU = s.addressModeV = s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            s.minLod = 0.0f; 
+            s.maxLod = VK_LOD_CLAMP_NONE;
+            if (vkCreateSampler(context.GetDevice(), &s, nullptr, &hizSampler) != VK_SUCCESS)
+                throw std::runtime_error("Failed to create Hi-Z sampler");
+        }
+
+        VkShaderModule hizComp = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/hiz_build.comp.spv");
+        HiZPipeline hizPipeline;
+        hizPipeline.Init(context, hizComp, hizSampler,
+            renderPass.GetDepthImageViews(), renderPass.GetHiZMipViews(),
+            renderPass.GetHiZMipLevels());
+        vkDestroyShaderModule(context.GetDevice(), hizComp, nullptr);
+
         // One-time: transition both history images UNDEFINED -> SHADER_READ so the
         // steady-state assumption (both start each frame in SHADER_READ) holds on frame 0.
         // Inlined one-shot command buffer, same pattern as VulkanContext::CopyBuffer.
@@ -1181,7 +1215,8 @@ int main() {
                 pipeline, tonemapPipeline, resolvePipeline, histRead, histWrite, firstFrame,
                 shadowMap, shadowPipeline, lightViewProj, skybox, showcaseSpheres, g_sceneObjects,
                 imguiManager, g_showGui, g_renderParams, tonemapMode, g_exposure, frameInFlight,
-                debugPipeline, g_debugView, ssrPipeline, camera, g_ssrEnabled, g_ssrReflectivity, g_ssrMaxSteps, g_ssrStepSize, g_ssrThickness);
+                debugPipeline, g_debugView, ssrPipeline, camera, g_ssrEnabled, g_ssrReflectivity, g_ssrMaxSteps, g_ssrStepSize, g_ssrThickness,
+                hizPipeline);
             
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
                 g_prevModelMatrices[i] = g_sceneObjects[i].transform;
@@ -1244,6 +1279,10 @@ int main() {
         shadowPipeline.Cleanup();
 
         rampBuffer.Destroy(context.GetDevice());
+
+        hizPipeline.Cleanup();
+        vkDestroySampler(context.GetDevice(), hizSampler, nullptr);
+
         swapchain.Cleanup();
     }
     catch (const std::exception& e) {

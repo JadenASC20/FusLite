@@ -85,7 +85,8 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
     const std::vector<VkImageView>& hdrViews,
     const std::vector<VkImageView>& depthViews,
     const std::vector<VkImageView>& normalViews,
-    const std::vector<VkImageView>& ssrViews)
+    const std::vector<VkImageView>& ssrViews,
+    VkImageView hizSampleView)
 {
     m_device = context.GetDevice();
     uint32_t n = (uint32_t)hdrViews.size();
@@ -96,16 +97,20 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
     s.magFilter = VK_FILTER_NEAREST; s.minFilter = VK_FILTER_NEAREST;
     s.addressModeU = s.addressModeV = s.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     s.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    s.minLod = 0.0f;
+    s.maxLod = VK_LOD_CLAMP_NONE;
     if (vkCreateSampler(m_device, &s, nullptr, &m_sampler) != VK_SUCCESS)
         throw std::runtime_error("Failed to create SSR sampler");
 
-    m_ssrSetLayout = MakeSampledLayout(m_device, 3);
+    // hdr, depth, normal, hiz
+    m_ssrSetLayout = MakeSampledLayout(m_device, 4); 
+
     m_compSetLayout = MakeSampledLayout(m_device, 2);
 
     // Pool: sampled descriptors per swapchain image (3 + 2)
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = n * 5;
+    ps.descriptorCount = n * 6;
     VkDescriptorPoolCreateInfo pInfo{};
     pInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pInfo.poolSizeCount = 1; pInfo.pPoolSizes = &ps; pInfo.maxSets = n * 2;
@@ -122,10 +127,10 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
         if (vkAllocateDescriptorSets(m_device, &a, m_ssrSets.data()) != VK_SUCCESS)
             throw std::runtime_error("Failed to allocate SSR sets");
         for (uint32_t i = 0; i < n; i++) {
-            VkDescriptorImageInfo imgs[3]{};
-            VkImageView views[3] = { hdrViews[i], depthViews[i], normalViews[i] };
-            VkWriteDescriptorSet w[3]{};
-            for (int b = 0; b < 3; b++) {
+            VkDescriptorImageInfo imgs[4]{};
+            VkImageView views[4] = { hdrViews[i], depthViews[i], normalViews[i], hizSampleView};
+            VkWriteDescriptorSet w[4]{};
+            for (int b = 0; b < 4; b++) {
                 imgs[b].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 imgs[b].imageView = views[b]; imgs[b].sampler = m_sampler;
                 w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -133,7 +138,7 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
                 w[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
                 w[b].descriptorCount = 1; w[b].pImageInfo = &imgs[b];
             }
-            vkUpdateDescriptorSets(m_device, 3, w, 0, nullptr);
+            vkUpdateDescriptorSets(m_device, 4, w, 0, nullptr);
         }
     }
     // Allocate + write composite sets (hdr, ssr)

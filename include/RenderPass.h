@@ -47,6 +47,13 @@ public:
     const std::vector<VkImageView>& GetCompositeImageViews() const { return m_compositeImageViews; }
     VkFormat GetCompositeFormat() const { return m_compositeFormat; }
 
+    VkImage GetHiZImage() const { return m_hizImage; }
+    VkImageView GetHiZSampleView() const { return m_hizSampleView; }        // for sampling (full chain)
+    const std::vector<VkImageView>& GetHiZMipViews() const { return m_hizMipViews; } // for storage writes (per mip)
+    VkFormat GetHiZFormat() const { return m_hizFormat; }
+    uint32_t GetHiZMipLevels() const { return m_hizMipLevels; }
+    VkExtent2D GetHiZBaseExtent() const { return m_hizBaseExtent; }
+
 private:
     void CreateDepthResources(const Swapchain& swapchain);
     void CreateHdrResources(const Swapchain& swapchain);
@@ -56,6 +63,7 @@ private:
     void CreateLuminanceResources();
     void CreateSSRResources(const Swapchain& swapchain);
     void CreateCompositeResources(const Swapchain& swapchain);
+    void CreateHiZResources(const Swapchain& swapchain);
 
     VulkanContext* m_context = nullptr;
 
@@ -101,4 +109,12 @@ private:
     std::vector<VkImage> m_compositeImages;
     std::vector<VkDeviceMemory> m_compositeMemory;
     std::vector<VkImageView> m_compositeImageViews;
+
+    VkFormat m_hizFormat = VK_FORMAT_R32G32_SFLOAT;
+    VkImage m_hizImage = VK_NULL_HANDLE;
+    VkDeviceMemory m_hizMemory = VK_NULL_HANDLE;
+    VkImageView m_hizSampleView = VK_NULL_HANDLE;       // views all mips (for sampling in the march)
+    std::vector<VkImageView> m_hizMipViews;             // for compute storage writes (one view per mip level)
+    uint32_t m_hizMipLevels = 1;
+    VkExtent2D m_hizBaseExtent = { 0, 0 };
 };

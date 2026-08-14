@@ -17,7 +17,7 @@ public:
         int   maxSteps;
         float stepSize;
         float thickness;
-        float _pad;
+        int   hizMipCount;
     };
 
     struct CompPush {
@@ -30,7 +30,8 @@ public:
         const std::vector<VkImageView>& hdrViews,
         const std::vector<VkImageView>& depthViews,
         const std::vector<VkImageView>& normalViews,
-        const std::vector<VkImageView>& ssrViews);
+        const std::vector<VkImageView>& ssrViews,
+        VkImageView hizSampleView);
 
     void Cleanup();
 
