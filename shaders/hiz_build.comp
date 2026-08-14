@@ -3,6 +3,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 // Source: mode 0 = scene depth (sampler2D, nonlinear); mode 1 = previous Hi-Z mip (sampler2D, RG=min/max)
 layout(binding = 0) uniform sampler2D srcTex;
+
 // Destination: this mip level, as a storage image (RG32F).
 layout(binding = 1, rg32f) uniform writeonly image2D dstMip;
 

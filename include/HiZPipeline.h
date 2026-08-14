@@ -34,7 +34,6 @@ private:
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
     VkDescriptorPool m_pool = VK_NULL_HANDLE;
-    // m_sets[img][mip]: descriptor for building mip `mip` on swapchain image `img`.
     std::vector<std::vector<VkDescriptorSet>> m_sets;
     uint32_t m_mipLevels = 1;
 };

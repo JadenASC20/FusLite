@@ -531,7 +531,7 @@ void RenderPass::CreateHiZResources(const Swapchain& swapchain)
         throw std::runtime_error("Failed to allocate Hi-Z memory");
     vkBindImageMemory(m_context->GetDevice(), m_hizImage, m_hizMemory, 0);
 
-    // Full-chain sample view (all mips), for the march + debug view
+    // Full-chain sample view (all mips -- for the march + debug view)
     VkImageViewCreateInfo sv{};
     sv.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     sv.image = m_hizImage;
@@ -541,7 +541,7 @@ void RenderPass::CreateHiZResources(const Swapchain& swapchain)
     if (vkCreateImageView(m_context->GetDevice(), &sv, nullptr, &m_hizSampleView) != VK_SUCCESS)
         throw std::runtime_error("Failed to create Hi-Z sample view");
 
-    // Per-mip views — each views exactly one mip level, for storage-image writes
+    // each views exactly one mip level, for storage-image writes
     m_hizMipViews.resize(m_hizMipLevels);
     for (uint32_t m = 0; m < m_hizMipLevels; m++) {
         VkImageViewCreateInfo mv{};

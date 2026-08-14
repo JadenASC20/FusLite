@@ -105,8 +105,6 @@ void HiZPipeline::Build(VkCommandBuffer cmd, uint32_t imageIndex, VkImage hizIma
         uint32_t w = std::max(1u, baseExtent.width >> m);
         uint32_t h = std::max(1u, baseExtent.height >> m);
 
-        // This mip: UNDEFINED -> GENERAL for storage write.
-        // (Whole image was UNDEFINED at frame start; each mip we touch once.)
         {
             VkImageMemoryBarrier toGeneral{};
             toGeneral.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -138,7 +136,7 @@ void HiZPipeline::Build(VkCommandBuffer cmd, uint32_t imageIndex, VkImage hizIma
         vkCmdDispatch(cmd, gx, gy, 1);
 
         // This mip: GENERAL -> SHADER_READ so the NEXT mip can sample it,
-        // and so the march can sample the whole chain afterwards.
+        // and so the march can sample the whole chain after
         {
             VkImageMemoryBarrier toRead{};
             toRead.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
