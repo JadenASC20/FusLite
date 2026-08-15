@@ -86,7 +86,8 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
     const std::vector<VkImageView>& depthViews,
     const std::vector<VkImageView>& normalViews,
     const std::vector<VkImageView>& ssrViews,
-    VkImageView hizSampleView)
+    VkImageView hizSampleView,
+    VkImageView prefilteredCubeView, VkSampler cubeSampler)
 {
     m_device = context.GetDevice();
     uint32_t n = (uint32_t)hdrViews.size();
@@ -105,19 +106,21 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
     // hdr, depth, normal, hiz
     m_ssrSetLayout = MakeSampledLayout(m_device, 4); 
 
-    m_compSetLayout = MakeSampledLayout(m_device, 2);
+    m_compSetLayout = MakeSampledLayout(m_device, 5); // hdr, ssr, normal, depth, cube
 
     // Pool: sampled descriptors per swapchain image (3 + 2)
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = n * 6;
+    ps.descriptorCount = n * 9; // 4 SSR + 5 composite
     VkDescriptorPoolCreateInfo pInfo{};
     pInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    pInfo.poolSizeCount = 1; pInfo.pPoolSizes = &ps; pInfo.maxSets = n * 2;
+    pInfo.poolSizeCount = 1; 
+    pInfo.pPoolSizes = &ps; 
+    pInfo.maxSets = n * 2;
     if (vkCreateDescriptorPool(m_device, &pInfo, nullptr, &m_pool) != VK_SUCCESS)
         throw std::runtime_error("Failed to create SSR pool");
 
-    // Allocate + write SSR sets (hdr, depth, normal)
+    // Allocate + write SSR sets (hdr, depth, normal, hiz)
     {
         std::vector<VkDescriptorSetLayout> layouts(n, m_ssrSetLayout);
         VkDescriptorSetAllocateInfo a{};
@@ -128,43 +131,54 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
             throw std::runtime_error("Failed to allocate SSR sets");
         for (uint32_t i = 0; i < n; i++) {
             VkDescriptorImageInfo imgs[4]{};
-            VkImageView views[4] = { hdrViews[i], depthViews[i], normalViews[i], hizSampleView};
+            VkImageView views[4] = { hdrViews[i], depthViews[i], normalViews[i], hizSampleView };
             VkWriteDescriptorSet w[4]{};
             for (int b = 0; b < 4; b++) {
                 imgs[b].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                imgs[b].imageView = views[b]; imgs[b].sampler = m_sampler;
+                imgs[b].imageView = views[b];
+                imgs[b].sampler = m_sampler;
                 w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[b].dstSet = m_ssrSets[i]; w[b].dstBinding = b;
+                w[b].dstSet = m_ssrSets[i];
+                w[b].dstBinding = b;
                 w[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[b].descriptorCount = 1; w[b].pImageInfo = &imgs[b];
+                w[b].descriptorCount = 1;
+                w[b].pImageInfo = &imgs[b];
             }
             vkUpdateDescriptorSets(m_device, 4, w, 0, nullptr);
         }
     }
-    // Allocate + write composite sets (hdr, ssr)
+
+    // Allocate + write composite sets (hdr, ssr, normal, depth, cube)
     {
         std::vector<VkDescriptorSetLayout> layouts(n, m_compSetLayout);
         VkDescriptorSetAllocateInfo a{};
         a.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        a.descriptorPool = m_pool; a.descriptorSetCount = n; a.pSetLayouts = layouts.data();
+        a.descriptorPool = m_pool;
+        a.descriptorSetCount = n;
+        a.pSetLayouts = layouts.data();
         m_compSets.resize(n);
         if (vkAllocateDescriptorSets(m_device, &a, m_compSets.data()) != VK_SUCCESS)
             throw std::runtime_error("Failed to allocate composite sets");
         for (uint32_t i = 0; i < n; i++) {
-            VkDescriptorImageInfo imgs[2]{};
-            VkImageView views[2] = { hdrViews[i], ssrViews[i] };
-            VkWriteDescriptorSet w[2]{};
-            for (int b = 0; b < 2; b++) {
+            VkDescriptorImageInfo imgs[5]{};
+            VkImageView views[5] = { hdrViews[i], ssrViews[i], normalViews[i], depthViews[i], prefilteredCubeView };
+            VkSampler   samps[5] = { m_sampler, m_sampler, m_sampler, m_sampler, cubeSampler };
+            VkWriteDescriptorSet w[5]{};
+            for (int b = 0; b < 5; b++) {
                 imgs[b].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                imgs[b].imageView = views[b]; imgs[b].sampler = m_sampler;
+                imgs[b].imageView = views[b];
+                imgs[b].sampler = samps[b];
                 w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-                w[b].dstSet = m_compSets[i]; w[b].dstBinding = b;
+                w[b].dstSet = m_compSets[i];
+                w[b].dstBinding = b;
                 w[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[b].descriptorCount = 1; w[b].pImageInfo = &imgs[b];
+                w[b].descriptorCount = 1;
+                w[b].pImageInfo = &imgs[b];
             }
-            vkUpdateDescriptorSets(m_device, 2, w, 0, nullptr);
+            vkUpdateDescriptorSets(m_device, 5, w, 0, nullptr);
         }
     }
+
 
     // Pipeline layouts (push constants)
     VkPushConstantRange ssrPC{ VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SSRPush) };

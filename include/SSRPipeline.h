@@ -21,6 +21,9 @@ public:
     };
 
     struct CompPush {
+        glm::mat4 invProj;
+        glm::mat4 invView;
+        glm::vec4 cameraPos;
         float reflectivity;
         float _p0, _p1, _p2;
     };
@@ -31,7 +34,8 @@ public:
         const std::vector<VkImageView>& depthViews,
         const std::vector<VkImageView>& normalViews,
         const std::vector<VkImageView>& ssrViews,
-        VkImageView hizSampleView);
+        VkImageView hizSampleView,
+        VkImageView prefilteredCubeView, VkSampler cubeSampler);
 
     void Cleanup();
 

@@ -436,9 +436,14 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         vkCmdBeginRendering(cmd, &compRI);
         vkCmdSetViewport(cmd, 0, 1, &vpD);
         vkCmdSetScissor(cmd, 0, 1, &scD);
+        
         SSRPipeline::CompPush cpc{};
+        cpc.invProj = glm::inverse(camera.GetProjectionMatrixNoJitter());
+        cpc.invView = glm::inverse(camera.GetViewMatrix());
+        cpc.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
         cpc.reflectivity = ssrReflectivity;
         ssrPipeline.BindComposite(cmd, imageIndex, cpc);
+
         vkCmdDraw(cmd, 3, 1, 0, 0);
         vkCmdEndRendering(cmd);
 
@@ -793,7 +798,8 @@ int main() {
             ssrVert, ssrFrag, compFrag,
             renderPass.GetHdrImageViews(), renderPass.GetDepthImageViews(),
             renderPass.GetNormalImageViews(), renderPass.GetSSRImageViews(), 
-            renderPass.GetHiZSampleView());
+            renderPass.GetHiZSampleView(), iblTextures.prefilteredSpecular.view,
+            iblTextures.prefilteredSpecular.sampler);
         vkDestroyShaderModule(context.GetDevice(), ssrVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), ssrFrag, nullptr);
         vkDestroyShaderModule(context.GetDevice(), compFrag, nullptr);

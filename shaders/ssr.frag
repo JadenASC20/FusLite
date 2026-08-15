@@ -36,7 +36,7 @@ vec3 ReconstructViewPos(vec2 uv, float depth) {
     return v.xyz / v.w;
 }
 
-// Project a view-space point to screen UV. Returns uv; sets ok=false if behind camera.
+// Project a view-space point to screen UV. Returns uv, sets ok = false if behind camera.
 vec2 ProjectToUV(vec3 viewPos, out bool ok) {
     vec4 clip = pc.proj * vec4(viewPos, 1.0);
     ok = clip.w > 0.0;
@@ -57,11 +57,13 @@ void main()
 
     // March the reflection ray. We advance in view space but use the Hi-Z pyramid
     // to skip empty space: at each step, read the min/max linear depth of the current
-    // screen cell at mip `level`; if the ray segment can't intersect the surface in
+    // screen cell at mip level; if the ray segment can't intersect the surface in
     // that cell (its linear depth is nearer than the cell's min), skip ahead and climb
     // a mip. If it might intersect (overlaps the cell's depth range), descend for detail.
+    
     vec3 rayPos = viewPos + reflDir * 0.05;   // small bias off the surface
-    int level = 0;                            // start fine; climb as we skip empty space
+    int level = 0;                            // start fine, climb as we skip empty space
+    
     int maxLevel = min(pc.hizMipCount - 1, 6);
 
     vec4 hitColor = vec4(0.0);
@@ -69,12 +71,12 @@ void main()
     for (int i = 0; i < pc.maxSteps; i++) {
         bool ok;
         vec2 uv = ProjectToUV(rayPos, ok);
-        if (!ok || uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break; // off-screen (CP3 fallback later)
+        if (!ok || uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
 
-        // Ray's linear depth at this point (view z is negative; linear eye distance = -z).
+        // Ray's linear depth at this point (view z is negative, linear eye distance = -z).
         float rayLinZ = -rayPos.z;
 
-        // Read the Hi-Z cell at this mip: R=min, G=max linear depth in the cell's footprint.
+        // Read the Hi-Z cell at this mip: R=min, G=max linear depth in the cell's footprint
         vec2 cell = textureLod(hizTex, uv, float(level)).rg;
         float cellMin = cell.x;
         float cellMax = cell.y;
@@ -83,13 +85,14 @@ void main()
         // If the ray is still NEARER than everything in the cell (rayLinZ < cellMin - thickness),
         // the cell is empty in front of the ray: skip ahead, climb a mip to skip faster.
         if (rayLinZ < cellMin - pc.thickness) {
-            rayPos += reflDir * pc.stepSize * (1.0 + float(level) * 4.0);  // big skips at coarse mips
+            rayPos += reflDir * pc.stepSize *  (2.0 + float(level) * float(level) * 0.5);  // big skips at coarse mips
             level = min(level + 1, maxLevel);
             continue;
         }
 
         // The ray has reached the cell's depth range. If we're at the finest mip, test for a hit.
         if (level == 0) {
+            
             // Compare against the actual surface depth at this pixel.
             float sceneDepth = texture(depthTex, uv).r;
             if (sceneDepth < 1.0) {
@@ -100,9 +103,12 @@ void main()
                     break;
                 }
             }
+
             // No hit at mip0: nudge forward a small step and keep going.
             rayPos += reflDir * pc.stepSize;
+
         } else {
+
             // Potential intersection at a coarse mip: descend for precision, don't advance.
             level = level - 1;
         }
