@@ -104,7 +104,8 @@ void Skybox::CreatePipeline(VulkanContext& context, GLFWwindow* window, VkFormat
 }
 
 void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorFormat, VkFormat depthFormat,
-    const char* equirectFilename, uint32_t numImages, VkFormat motionFormat, VkFormat normalFormat)
+    const char* equirectFilename, uint32_t numImages, VkFormat motionFormat, VkFormat normalFormat,
+    VkFormat materialFormat)
 {
     m_device = context.GetDevice();
 
@@ -179,8 +180,8 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
     depthStencil.depthWriteEnable = VK_FALSE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
-    VkPipelineColorBlendAttachmentState blendAttachments[3]{};
-    for (int i = 0; i < 3; i++) {
+    VkPipelineColorBlendAttachmentState blendAttachments[4]{};
+    for (int i = 0; i < 4; i++) {
         blendAttachments[i].blendEnable = VK_FALSE;
         blendAttachments[i].colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -189,7 +190,7 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    colorBlending.attachmentCount = 3;
+    colorBlending.attachmentCount = 4;
     colorBlending.pAttachments = blendAttachments;
 
     VkPipelineLayoutCreateInfo layoutInfo{};
@@ -201,10 +202,10 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
         throw std::runtime_error("Failed to create skybox pipeline layout");
     }
 
-    VkFormat colorFormats[3] = { colorFormat, motionFormat, normalFormat };
+    VkFormat colorFormats[4] = { colorFormat, motionFormat, normalFormat, materialFormat };
     VkPipelineRenderingCreateInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingInfo.colorAttachmentCount = 3;
+    renderingInfo.colorAttachmentCount = 4;
     renderingInfo.pColorAttachmentFormats = colorFormats;
     renderingInfo.depthAttachmentFormat = depthFormat;
 

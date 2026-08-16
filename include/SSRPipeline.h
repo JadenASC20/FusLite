@@ -35,7 +35,8 @@ public:
         const std::vector<VkImageView>& normalViews,
         const std::vector<VkImageView>& ssrViews,
         VkImageView hizSampleView,
-        VkImageView prefilteredCubeView, VkSampler cubeSampler);
+        VkImageView prefilteredCubeView, VkSampler cubeSampler,
+        const std::vector<VkImageView>& materialViews);
 
     void Cleanup();
 

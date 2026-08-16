@@ -78,6 +78,7 @@ layout(location = 5) in vec4 fragPrevClipPos;
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outMotion;
 layout(location = 2) out vec4 outNormal;
+layout(location = 3) out vec2 outMaterial;
 
 const float PI = 3.14159265359;
 
@@ -440,5 +441,6 @@ void main() {
     outMotion = (prevNDC - currentNDC) * 0.5;
     outNormal = vec4(geometricN * 0.5 + 0.5, 1.0);
 
+    outMaterial = vec2(roughness, metallic);
 
 }

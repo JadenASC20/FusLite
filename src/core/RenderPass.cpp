@@ -16,6 +16,7 @@ void RenderPass::Init(VulkanContext& context, const Swapchain& swapchain)
     CreateHdrResources(swapchain);
     CreateMotionResources(swapchain);
     CreateNormalResources(swapchain);
+    CreateMaterialResources(swapchain);
     CreateSSRResources(swapchain);
     CreateCompositeResources(swapchain);
     CreateHiZResources(swapchain);
@@ -558,6 +559,57 @@ void RenderPass::CreateHiZResources(const Swapchain& swapchain)
         extent.width, extent.height, m_hizMipLevels);
 }
 
+void RenderPass::CreateMaterialResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    size_t numImages = swapchain.GetImageViews().size();
+    
+    m_materialImages.resize(numImages);
+    m_materialMemory.resize(numImages);
+    m_materialImageViews.resize(numImages);
+    
+    for (size_t i = 0; i < numImages; i++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = { extent.width, extent.height, 1 };
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = m_materialFormat;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &m_materialImages[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create material G-buffer image");
+        }
+        VkMemoryRequirements memRequirements;
+        vkGetImageMemoryRequirements(m_context->GetDevice(), m_materialImages[i], &memRequirements);
+        VkMemoryAllocateInfo allocInfo{};
+        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocInfo.allocationSize = memRequirements.size;
+        allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+            memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &m_materialMemory[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to allocate material G-buffer image memory");
+        }
+        vkBindImageMemory(m_context->GetDevice(), m_materialImages[i], m_materialMemory[i], 0);
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = m_materialImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = m_materialFormat;                        // <-- material format
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_materialImageViews[i]) != VK_SUCCESS) {
+            throw std::runtime_error("Failed to create material G-buffer image view");
+        }
+    }
+    printf("%zu material G-buffer resource(s) created (R8G8_UNORM).\n", numImages);
+}
+
 void RenderPass::Cleanup()
 {
     for (int f = 0; f < 2; f++) {
@@ -640,4 +692,7 @@ void RenderPass::Cleanup()
     if (m_hizImage) vkDestroyImage(m_context->GetDevice(), m_hizImage, nullptr);
     if (m_hizMemory) vkFreeMemory(m_context->GetDevice(), m_hizMemory, nullptr);
 
+    for (auto view : m_materialImageViews) vkDestroyImageView(m_context->GetDevice(), view, nullptr);
+    for (auto img : m_materialImages) vkDestroyImage(m_context->GetDevice(), img, nullptr);
+    for (auto mem : m_materialMemory) vkFreeMemory(m_context->GetDevice(), mem, nullptr);
 }

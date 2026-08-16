@@ -285,7 +285,8 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
 void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     VkFormat colorFormat, VkFormat depthFormat,
     VkShaderModule vertShader, VkShaderModule fragShader, 
-    uint32_t maxDescriptorSets, VkFormat motionFormat, VkFormat normalFormat)
+    uint32_t maxDescriptorSets, VkFormat motionFormat, VkFormat normalFormat,
+    VkFormat materialFormat)
 {
     m_device = context.GetDevice();
 
@@ -361,8 +362,8 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    VkPipelineColorBlendAttachmentState blendAttachments[3]{};
-    for (int i = 0; i < 3; i++) {
+    VkPipelineColorBlendAttachmentState blendAttachments[4]{};
+    for (int i = 0; i < 4; i++) {
         blendAttachments[i].blendEnable = VK_FALSE;
         blendAttachments[i].colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -372,7 +373,7 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
-    colorBlending.attachmentCount = 3;
+    colorBlending.attachmentCount = 4;
     colorBlending.pAttachments = blendAttachments;
 
     VkPushConstantRange pushConstantRange{};
@@ -392,10 +393,10 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     }
 
     // Dynamic rendering: describe attachment formats instead of using a VkRenderPass
-    VkFormat colorFormats[3] = { colorFormat, motionFormat, normalFormat };
+    VkFormat colorFormats[4] = { colorFormat, motionFormat, normalFormat, materialFormat };
     VkPipelineRenderingCreateInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
-    renderingInfo.colorAttachmentCount = 3;
+    renderingInfo.colorAttachmentCount = 4;
     renderingInfo.pColorAttachmentFormats = colorFormats;
     renderingInfo.depthAttachmentFormat = depthFormat;
 

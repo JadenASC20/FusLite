@@ -54,6 +54,10 @@ public:
     uint32_t GetHiZMipLevels() const { return m_hizMipLevels; }
     VkExtent2D GetHiZBaseExtent() const { return m_hizBaseExtent; }
 
+    const std::vector<VkImage>& GetMaterialImages() const { return m_materialImages; }
+    const std::vector<VkImageView>& GetMaterialImageViews() const { return m_materialImageViews; }
+    VkFormat GetMaterialFormat() const { return m_materialFormat; }
+
 private:
     void CreateDepthResources(const Swapchain& swapchain);
     void CreateHdrResources(const Swapchain& swapchain);
@@ -64,6 +68,7 @@ private:
     void CreateSSRResources(const Swapchain& swapchain);
     void CreateCompositeResources(const Swapchain& swapchain);
     void CreateHiZResources(const Swapchain& swapchain);
+    void CreateMaterialResources(const Swapchain& swapchain);
 
     VulkanContext* m_context = nullptr;
 
@@ -117,4 +122,9 @@ private:
     std::vector<VkImageView> m_hizMipViews;             // for compute storage writes (one view per mip level)
     uint32_t m_hizMipLevels = 1;
     VkExtent2D m_hizBaseExtent = { 0, 0 };
+
+    VkFormat m_materialFormat = VK_FORMAT_R8G8_UNORM;
+    std::vector<VkImage> m_materialImages;
+    std::vector<VkDeviceMemory> m_materialMemory;
+    std::vector<VkImageView> m_materialImageViews;
 };

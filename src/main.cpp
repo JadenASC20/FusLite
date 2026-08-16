@@ -203,6 +203,9 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     VkImage compositeImage = renderResources.GetCompositeImages()[imageIndex];
     VkImageView compositeView = renderResources.GetCompositeImageViews()[imageIndex];
 
+    VkImage materialImage = renderResources.GetMaterialImages()[imageIndex];
+    VkImageView materialView = renderResources.GetMaterialImageViews()[imageIndex];
+
     VkImageView debugView = VK_NULL_HANDLE;
     switch (debugMode) {
         case 1: debugView = hdrView; break;                                        // already SHADER_READ after resolve
@@ -281,6 +284,12 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
+    TransitionImage(cmd, materialImage,
+        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+
     VkRenderingAttachmentInfo hdrColorAttachment{};
     hdrColorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     hdrColorAttachment.imageView = hdrView;
@@ -313,12 +322,20 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     normalAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     normalAttachment.clearValue.color = { 0.5f, 0.5f, 1.0f, 1.0f };  // encodes N=(0,0,1)
 
-    VkRenderingAttachmentInfo sceneAttachments[3] = { hdrColorAttachment, motionAttachment, normalAttachment };
+    VkRenderingAttachmentInfo materialAttachment{};
+    materialAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    materialAttachment.imageView = materialView;
+    materialAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    materialAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    materialAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    materialAttachment.clearValue.color = { 0.5f, 0.0f, 0.0f, 0.0f };  // roughness 0.5, metallic 0 default
+
+    VkRenderingAttachmentInfo sceneAttachments[4] = { hdrColorAttachment, motionAttachment, normalAttachment, materialAttachment };
     VkRenderingInfo sceneRenderingInfo{};
     sceneRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     sceneRenderingInfo.renderArea = { {0, 0}, extent };
     sceneRenderingInfo.layerCount = 1;
-    sceneRenderingInfo.colorAttachmentCount = 3;
+    sceneRenderingInfo.colorAttachmentCount = 4;
     sceneRenderingInfo.pColorAttachments = sceneAttachments;
     sceneRenderingInfo.pDepthAttachment = &depthAttachment;
     vkCmdBeginRendering(cmd, &sceneRenderingInfo);
@@ -359,6 +376,11 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
             VK_IMAGE_ASPECT_COLOR_BIT,
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        TransitionImage(cmd, materialImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         TransitionImage(cmd, depthImage,
             VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -387,7 +409,9 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         VkRenderingInfo ssrRI{};
         ssrRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         ssrRI.renderArea = { {0,0}, extent };
-        ssrRI.layerCount = 1; ssrRI.colorAttachmentCount = 1; ssrRI.pColorAttachments = &ssrAtt;
+        ssrRI.layerCount = 1; 
+        ssrRI.colorAttachmentCount = 1; 
+        ssrRI.pColorAttachments = &ssrAtt;
 
         vkCmdBeginRendering(cmd, &ssrRI);
         if (ssrEnabled) {
@@ -431,7 +455,9 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         VkRenderingInfo compRI{};
         compRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
         compRI.renderArea = { {0,0}, extent };
-        compRI.layerCount = 1; compRI.colorAttachmentCount = 1; compRI.pColorAttachments = &compAtt;
+        compRI.layerCount = 1; 
+        compRI.colorAttachmentCount = 1; 
+        compRI.pColorAttachments = &compAtt;
 
         vkCmdBeginRendering(cmd, &compRI);
         vkCmdSetViewport(cmd, 0, 1, &vpD);
@@ -721,7 +747,7 @@ int main() {
         Skybox skybox;
         skybox.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
             "assets/Skybox.hdr", static_cast<uint32_t>(uniformBuffers.size()),
-            renderPass.GetMotionFormat(), renderPass.GetNormalFormat());
+            renderPass.GetMotionFormat(), renderPass.GetNormalFormat(), renderPass.GetMaterialFormat());
         VulkanContext::IBLTextures iblTextures = context.CreateIBLFromEquirect("assets/Skybox.hdr");
         
         VkShaderModule vertShader = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/triangle.vert.spv");
@@ -730,7 +756,8 @@ int main() {
         GraphicsPipeline pipeline;
         uint32_t maxDescriptorSets = 32 * static_cast<uint32_t>(uniformBuffers.size());
         pipeline.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
-            vertShader, fragShader, maxDescriptorSets, renderPass.GetMotionFormat(), renderPass.GetNormalFormat());
+            vertShader, fragShader, maxDescriptorSets, renderPass.GetMotionFormat(), renderPass.GetNormalFormat(),
+            renderPass.GetMaterialFormat());
         vkDestroyShaderModule(context.GetDevice(), vertShader, nullptr);
         vkDestroyShaderModule(context.GetDevice(), fragShader, nullptr);
         
@@ -785,6 +812,7 @@ int main() {
         VkShaderModule debugVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
         VkShaderModule debugFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/debug_view.frag.spv");
         DebugViewPipeline debugPipeline;
+
         debugPipeline.Init(context, swapchain.GetImageFormat(), debugVert, debugFrag);
         vkDestroyShaderModule(context.GetDevice(), debugVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), debugFrag, nullptr);
@@ -799,7 +827,8 @@ int main() {
             renderPass.GetHdrImageViews(), renderPass.GetDepthImageViews(),
             renderPass.GetNormalImageViews(), renderPass.GetSSRImageViews(), 
             renderPass.GetHiZSampleView(), iblTextures.prefilteredSpecular.view,
-            iblTextures.prefilteredSpecular.sampler);
+            iblTextures.prefilteredSpecular.sampler, renderPass.GetMaterialImageViews());
+
         vkDestroyShaderModule(context.GetDevice(), ssrVert, nullptr);
         vkDestroyShaderModule(context.GetDevice(), ssrFrag, nullptr);
         vkDestroyShaderModule(context.GetDevice(), compFrag, nullptr);
