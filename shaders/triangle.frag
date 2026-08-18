@@ -293,7 +293,9 @@ float PenumbraPattern(int mode, vec2 uv, float scale)
 }
 
 void main() {
-    vec3 albedo = texture(diffuseSampler, fragTexCoord).rgb;
+    vec4 albedoSample = texture(diffuseSampler, fragTexCoord);
+    if (albedoSample.a < 0.5) discard;   // kill transparent texels
+    vec3 albedo = albedoSample.rgb;
     albedo *= pc.colorTint.rgb;
     vec2 mr = texture(metallicRoughnessSampler, fragTexCoord).gb;
     float roughness = clamp(mr.x * pc.roughness, 0.05, 1.0);

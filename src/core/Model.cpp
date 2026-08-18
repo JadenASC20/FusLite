@@ -75,7 +75,8 @@ void Model::LoadFromFile(VulkanContext& context, const std::string& path)
         aiProcess_Triangulate |
         aiProcess_GenSmoothNormals |
         aiProcess_JoinIdenticalVertices |
-        aiProcess_CalcTangentSpace
+        aiProcess_CalcTangentSpace |
+        aiProcess_FlipUVs
     );
     if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         throw std::runtime_error("Assimp failed to load: " + std::string(importer.GetErrorString()));
