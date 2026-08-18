@@ -1,6 +1,8 @@
 #pragma once
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
+#include <MaterialParams.h>
 
 constexpr int RAMP_RESOLUTION = 64;
 constexpr int MAX_RAMP_OBJECTS = 8;
@@ -17,10 +19,14 @@ struct SceneObject
     std::string name;
     glm::mat4 transform = glm::mat4(1.0f);
     glm::vec3 colorTint = glm::vec3(1.0f);
+    
+    std::vector<MaterialParams> materials;
     float roughness = 0.5f;
     float metallic = 0.0f;
+
     float clearcoatFactor = 0.8f;
     float clearcoatRoughness = 0.03f;
+
     float flakeStrength = 0.12f;
     float flakeScale = 400.0f;
 

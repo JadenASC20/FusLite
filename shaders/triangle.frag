@@ -31,6 +31,7 @@ layout(push_constant) uniform PushConstants {
     float roughness;
     float metallic;
     float lightSize;
+    vec4 normalUVTransform; 
 } pc;
 
 
@@ -68,12 +69,15 @@ layout(std430, binding = 10) readonly buffer PenumbraRampBuffer {
     vec4 colors[];
 } rampBuffer;
 
+layout(binding = 11) uniform sampler2D normalSampler;
+
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragNormalWorld;
 layout(location = 3) in vec3 fragPosWorld;
 layout(location = 4) in vec4 fragClipPos;
 layout(location = 5) in vec4 fragPrevClipPos;
+layout(location = 6) in vec4 fragTangentWorld;
 
 layout(location = 0) out vec4 outColor;
 layout(location = 1) out vec2 outMotion;
@@ -299,13 +303,25 @@ void main() {
     float clearcoatRoughness = pc.clearcoatRoughness;
 
     vec3 N = normalize(fragNormalWorld);
-    vec3 geometricN = N;
-    vec3 dPosX = dFdx(fragPosWorld);
-    vec3 dPosY = dFdy(fragPosWorld);
-    vec3 approxTangent = normalize(dPosX - N * dot(dPosX, N));
-    vec3 approxBitangent = normalize(cross(N, approxTangent));
-    N = ApplyFlakeNormal(N, approxTangent, approxBitangent, fragTexCoord, pc.flakeScale, pc.flakeStrength);
+    vec3 geometricN = N;   // <-- SSR G-buffer uses THIS (pre-normalmap, pre-flake). Do not change.
 
+    // Per-vertex tangent frame (crisp on curved surfaces, no screen-space wobble).
+    vec3 T = normalize(fragTangentWorld.xyz);
+    // Gram-Schmidt re-orthogonalize against the interpolated normal.
+    T = normalize(T - N * dot(N, T));
+    vec3 approxTangent = T;
+    vec3 approxBitangent = cross(N, T) * fragTangentWorld.w;   // w carries handedness
+
+    vec2 nUV = fragTexCoord * pc.normalUVTransform.xy + pc.normalUVTransform.zw;
+    vec3 nTex = texture(normalSampler, nUV).xyz * 2.0 - 1.0;
+    
+    // If the map looks inverted (bumps read as dents), flip green: nTex.y = -nTex.y;
+    mat3 TBN = mat3(approxTangent, approxBitangent, N);
+    N = normalize(TBN * nTex);
+
+    // Flake perturbs the normal-mapped surface (shading only, never the SSR normal).
+    N = ApplyFlakeNormal(N, approxTangent, approxBitangent, fragTexCoord, pc.flakeScale, pc.flakeStrength);
+    
     vec3 V = normalize(ubo.cameraPos.xyz - fragPosWorld);
     float NdotV = max(dot(N, V), 0.0);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
@@ -434,6 +450,10 @@ void main() {
     vec3 finalColor = ambient * ambientOcclusion + outgoing;
 
     outColor = vec4(finalColor, 1.0);
+    
+    // DEBUGGING
+    // outColor = vec4(texture(normalSampler, fragTexCoord).xyz, 1.0);
+    //outColor = vec4(fract(fragTexCoord), 0.0, 1.0);
 
     // Screen-space motion in UV units: where this pixel was, minus where it is.
     vec2 currentNDC = fragClipPos.xy / fragClipPos.w;

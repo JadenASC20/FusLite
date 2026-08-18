@@ -17,6 +17,8 @@ struct RenderParams
     float roughness = 0.5f;
     float metallic = 0.0f;
     float lightSize = 0.05f;
+    float _pad0 = 0.0f;
+    glm::vec4 normalUVTransform = glm::vec4(1.0f, 1.0f, 0.0f, 0.0f);
 };
 
 constexpr int MAX_LIGHTS = 128;

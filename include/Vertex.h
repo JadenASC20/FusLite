@@ -8,6 +8,7 @@ struct Vertex
     float normal[3];
     float color[3];
     float texCoord[2];
+    float tangent[4];
 
     static VkVertexInputBindingDescription GetBindingDescription()
     {
@@ -18,9 +19,9 @@ struct Vertex
         return binding;
     }
 
-    static std::array<VkVertexInputAttributeDescription, 4> GetAttributeDescriptions()
+    static std::array<VkVertexInputAttributeDescription, 5> GetAttributeDescriptions()
     {
-        std::array<VkVertexInputAttributeDescription, 4> attributes{};
+        std::array<VkVertexInputAttributeDescription, 5> attributes{};
 
         attributes[0].binding = 0;
         attributes[0].location = 0;
@@ -41,6 +42,11 @@ struct Vertex
         attributes[3].location = 3;
         attributes[3].format = VK_FORMAT_R32G32_SFLOAT;
         attributes[3].offset = offsetof(Vertex, texCoord);
+
+        attributes[4].binding = 0; 
+        attributes[4].location = 4;
+        attributes[4].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+        attributes[4].offset = offsetof(Vertex, tangent);
 
         return attributes;
     }

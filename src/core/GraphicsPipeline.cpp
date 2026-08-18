@@ -82,15 +82,23 @@ void GraphicsPipeline::CreateDescriptorSetLayout()
     rampBinding.descriptorCount = 1;
     rampBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    VkDescriptorSetLayoutBinding normalSamplerBinding{};
+    normalSamplerBinding.binding = 11;
+    normalSamplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    normalSamplerBinding.descriptorCount = 1;
+    normalSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+
     VkDescriptorSetLayoutBinding bindings[] = {
         uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding,
         irradianceBinding, prefilteredBinding, brdfLUTBinding, lightBufferBinding,
-        clusterLightInfoBinding, lightIndexBinding, shadowMapBinding, rampBinding
+        clusterLightInfoBinding, lightIndexBinding, shadowMapBinding, rampBinding,
+        normalSamplerBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 11;
+    layoutInfo.bindingCount = 12;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
@@ -104,7 +112,7 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = maxSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = maxSets * 6;
+    poolSizes[1].descriptorCount = maxSets * 7;
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[2].descriptorCount = maxSets * 4; // lightBuffer, clusterLightInfo, lightIndex — 3 storage buffers now
 
@@ -121,7 +129,8 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
 
 std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
     const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
-    const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture,
+    const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture, 
+    const VulkanTexture& normalTexture,
     const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
     const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
     const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer, 
@@ -197,7 +206,12 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         rampInfo.offset = 0;
         rampInfo.range = VK_WHOLE_SIZE;
 
-        VkWriteDescriptorSet writes[11]{};
+        VkDescriptorImageInfo normalInfo{};
+        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        normalInfo.imageView = normalTexture.view;
+        normalInfo.sampler = normalTexture.sampler;
+
+        VkWriteDescriptorSet writes[12]{};
 
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = sets[i];
@@ -276,7 +290,14 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         writes[10].descriptorCount = 1;
         writes[10].pBufferInfo = &rampInfo;
 
-        vkUpdateDescriptorSets(m_device, 11, writes, 0, nullptr);
+        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[11].dstSet = sets[i];
+        writes[11].dstBinding = 11;
+        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[11].descriptorCount = 1;
+        writes[11].pImageInfo = &normalInfo;
+
+        vkUpdateDescriptorSets(m_device, 12, writes, 0, nullptr);
     }
 
     return sets;

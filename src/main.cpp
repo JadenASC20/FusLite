@@ -33,9 +33,10 @@
 #include <DebugViewPipeline.h>
 #include <SSRPipeline.h>
 #include <HiZPipeline.h>
-
+#include <filesystem>
 
 #define GLFW_INCLUDE_NONE
+#define SCENE_HERO_MCLAREN 1   // 0 = shaderballs scene, 1 = McLaren scene
 
 #include <GLFW/glfw3.h>
 
@@ -94,6 +95,21 @@ static float g_ssrStepSize = 0.25f;
 static float g_ssrThickness = 0.5f;
 
 const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth", "SSR" };
+
+#if SCENE_HERO_MCLAREN
+
+const std::vector<std::string> modelPaths = {
+    "assets/McLarenShowcaseDemo/McLaren.glb",
+    "assets/McLarenShowcaseDemo/McLarenStage.glb"
+};
+const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenAutoshop.hdr";
+#else
+const std::vector<std::string> modelPaths = {
+    "assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj",
+    "assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/floor.obj"
+};
+const char* skyboxHdri = "assets/ShaderBallShowcase/Skybox.hdr";
+#endif
 
 void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods)
 {
@@ -344,20 +360,9 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     pipeline.Bind(cmd);
     pipeline.PushParams(cmd, params);
 
-    // Showcase spheres
     for (size_t i = 0; i < showcaseSpheres.size(); i++) {
-        const SceneObject& obj = sceneObjects[i];
-        params.colorTint = glm::vec4(obj.colorTint, 0.0f);
-        params.roughness = obj.roughness;
-        params.metallic = obj.metallic;
-        params.clearcoatFactor = obj.clearcoatFactor;
-        params.clearcoatRoughness = obj.clearcoatRoughness;
-        params.flakeStrength = obj.flakeStrength;
-        params.flakeScale = obj.flakeScale;
-        pipeline.PushParams(cmd, params);
-        showcaseSpheres[i].Draw(cmd, pipeline.GetLayout(), imageIndex);
+        showcaseSpheres[i].Draw(cmd, pipeline.GetLayout(), imageIndex, params, sceneObjects[i].materials);
     }
-
     vkCmdEndRendering(cmd);
 
     // SSR: scene outputs (HDR, depth, normal) -> shader read; march; write SSR target
@@ -746,15 +751,15 @@ int main() {
         
         Skybox skybox;
         skybox.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
-            "assets/Skybox.hdr", static_cast<uint32_t>(uniformBuffers.size()),
+            skyboxHdri, static_cast<uint32_t>(uniformBuffers.size()),
             renderPass.GetMotionFormat(), renderPass.GetNormalFormat(), renderPass.GetMaterialFormat());
-        VulkanContext::IBLTextures iblTextures = context.CreateIBLFromEquirect("assets/Skybox.hdr");
+        VulkanContext::IBLTextures iblTextures = context.CreateIBLFromEquirect(skyboxHdri);
         
         VkShaderModule vertShader = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/triangle.vert.spv");
         VkShaderModule fragShader = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/triangle.frag.spv");
         
         GraphicsPipeline pipeline;
-        uint32_t maxDescriptorSets = 32 * static_cast<uint32_t>(uniformBuffers.size());
+        uint32_t maxDescriptorSets = 256 * static_cast<uint32_t>(uniformBuffers.size());
         pipeline.Init(context, window, renderPass.GetHdrFormat(), renderPass.GetDepthFormat(),
             vertShader, fragShader, maxDescriptorSets, renderPass.GetMotionFormat(), renderPass.GetNormalFormat(),
             renderPass.GetMaterialFormat());
@@ -774,22 +779,19 @@ int main() {
         BufferAndMemory rampBuffer = context.CreateStorageBuffer(
             sizeof(glm::vec4) * MAX_RAMP_OBJECTS * RAMP_RESOLUTION);
         
-        const std::vector<std::string> modelPaths = {
-            "assets/ShaderBall.obj",
-            "assets/ShaderBall.obj",
-            "assets/ShaderBall.obj",
-            "assets/ShaderBall.obj",
-            "assets/ShaderBall.obj",
-            "assets/floor.obj"
-        };
-        
         const int NUM_SCENE_MODELS = static_cast<int>(modelPaths.size());
         
+        printf("CWD: %s\n", std::filesystem::current_path().string().c_str());
+        printf("glb exists: %d\n",
+            (int)std::filesystem::exists("assets/McLarenShowcaseDemo/McLaren.glb"));
+
         std::vector<Model> showcaseSpheres(NUM_SCENE_MODELS);
         std::vector<std::vector<BufferAndMemory>> showcaseUniformBuffers(NUM_SCENE_MODELS);
         
         for (int i = 0; i < NUM_SCENE_MODELS; i++) {
             showcaseSpheres[i].LoadFromFile(context, modelPaths[i]);
+            printf(">>> Model %d has %zu materials\n", i, showcaseSpheres[i].GetDefaultMaterials().size());
+            fflush(stdout);
             showcaseUniformBuffers[i].resize(swapchain.GetImages().size());
             
             for (auto& ubo : showcaseUniformBuffers[i]) {
@@ -937,25 +939,137 @@ int main() {
        
         float spacing = 2.5f;
         
-        for (int i = 0; i < 5; i++) {
-            SceneObject sphere;
-            sphere.name = "pSphere" + std::string(1, 'A' + i);
-            sphere.transform = glm::translate(glm::mat4(1.0f), glm::vec3((i - 2) * spacing, 0.0f, 0.0f));
-            sphere.colorTint = glm::vec3(0.7f, 0.1f, 0.1f);
-            sphere.clearcoatFactor = 0.2f + i * 0.15f;
-            sphere.flakeStrength = 0.0f;
-            g_sceneObjects.push_back(sphere);
+        #if SCENE_HERO_MCLAREN
+            SceneObject car;
+            car.name = "McLaren Car";
+            car.transform = glm::mat4(1.0f);
+            car.colorTint = glm::vec3(0.8f, 0.05f, 0.05f);
+            car.roughness = 0.35f; 
+            car.metallic = 1.0f;      // paint: metallic base + clearcoat
+            car.clearcoatFactor = 1.0f; 
+            car.clearcoatRoughness = 0.05f;
+            car.flakeStrength = 0.08f; 
+            car.flakeScale = 400.0f;
+            g_sceneObjects.push_back(car);
+
+            SceneObject disc;
+            disc.name = "Turntable";
+            disc.transform = glm::mat4(1.0f);
+            disc.colorTint = glm::vec3(0.1f); 
+            disc.roughness = 0.1f; 
+            disc.metallic = 0.0f;
+            g_sceneObjects.push_back(disc);
+
+        #else
+            for (int i = 0; i < 5; i++) {
+                SceneObject sphere;
+                sphere.name = "pSphere" + std::string(1, 'A' + i);
+                sphere.transform = glm::translate(glm::mat4(1.0f), glm::vec3((i - 2) * spacing, 0.0f, 0.0f));
+                sphere.colorTint = glm::vec3(0.7f, 0.1f, 0.1f);
+                sphere.clearcoatFactor = 0.2f + i * 0.15f;
+                sphere.flakeStrength = 0.0f;
+                g_sceneObjects.push_back(sphere);
+            }
+        
+            SceneObject ground;
+            ground.name = "pGroundPlane";
+            ground.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1.0f, 0.0f))
+                * glm::scale(glm::mat4(1.0f), glm::vec3(10.0f));
+            ground.colorTint = glm::vec3(0.55f, 0.55f, 0.55f);
+            ground.clearcoatFactor = 0.0f;
+            ground.flakeStrength = 0.0f;
+
+            g_sceneObjects.push_back(ground);
+        
+        #endif
+
+        for (size_t i = 0; i < g_sceneObjects.size() && i < showcaseSpheres.size(); i++) {
+            g_sceneObjects[i].materials = showcaseSpheres[i].GetDefaultMaterials();
+            if (g_sceneObjects[i].materials.empty()) {
+                // Fallback so Draw's mats.front() is never UB.
+                MaterialParams mp;
+                mp.name = "default";
+                mp.colorTint = g_sceneObjects[i].colorTint;
+                mp.roughness = g_sceneObjects[i].roughness;
+                mp.metallic = g_sceneObjects[i].metallic;
+                mp.clearcoatFactor = g_sceneObjects[i].clearcoatFactor;
+                mp.clearcoatRoughness = g_sceneObjects[i].clearcoatRoughness;
+                mp.flakeStrength = g_sceneObjects[i].flakeStrength;
+                mp.flakeScale = g_sceneObjects[i].flakeScale;
+                g_sceneObjects[i].materials.push_back(mp);
+            }
         }
-        
-        SceneObject ground;
-        ground.name = "pGroundPlane";
-        ground.transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -1.0f, 0.0f))
-            * glm::scale(glm::mat4(1.0f), glm::vec3(10.0f));
-        ground.colorTint = glm::vec3(0.55f, 0.55f, 0.55f);
-        ground.clearcoatFactor = 0.0f;
-        ground.flakeStrength = 0.0f;
-        
-        g_sceneObjects.push_back(ground);
+
+        {
+            auto contains = [](const std::string& hay, const char* needle) {
+                return hay.find(needle) != std::string::npos;
+            };
+            auto assignMaterialRoles = [&](std::vector<MaterialParams>& mats) {
+                for (MaterialParams& mp : mats) {
+                    const std::string& n = mp.name;
+                    bool texDriven = mp.hasMRTexture;
+
+                    if (contains(n, "Glass") || contains(n, "Window")) {
+                        mp.metallic = 0.0f; mp.roughness = 0.05f;
+                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "CarPaint") && !contains(n, "Trim")) {
+                        if (!texDriven) { mp.metallic = 0.0f; mp.roughness = 0.35f; }
+                        mp.clearcoatFactor = 1.0f; mp.clearcoatRoughness = 0.04f;
+                        mp.flakeStrength = 0.10f; mp.flakeScale = 1000.0f;
+                        continue;
+                    }
+                    if (contains(n, "Chrome") || contains(n, "Mirror")) {
+                        mp.metallic = 1.0f; mp.roughness = 0.35f;
+                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "Rim") || contains(n, "Wheel")) {
+                        mp.metallic = 0.0f; mp.roughness = 0.70f;
+                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "Calliper") || contains(n, "Caliper")) {
+                        mp.metallic = 0.0f; mp.roughness = 0.35f;
+                        mp.clearcoatFactor = 0.6f; mp.clearcoatRoughness = 0.10f;
+                        mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "Carbon")) {
+                        mp.metallic = 0.0f; mp.roughness = 0.30f;
+                        mp.clearcoatFactor = 0.8f; mp.clearcoatRoughness = 0.08f;
+                        mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "Aluminum") || contains(n, "Engine") || contains(n, "Chassis")) {
+                        mp.metallic = 1.0f; mp.roughness = 0.6f;
+                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "PianoBlack")) {
+                        mp.metallic = 0.0f; mp.roughness = 0.08f;
+                        mp.clearcoatFactor = 1.0f; mp.clearcoatRoughness = 0.04f;
+                        mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "Light")) {
+                        mp.metallic = 0.0f; mp.roughness = 0.15f;
+                        mp.clearcoatFactor = 0.5f; mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "Interior")) {
+                        mp.metallic = 0.0f; mp.roughness = 0.6f;
+                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
+                    }
+                    if (contains(n, "Plastic") || contains(n, "Grille") ||
+                        contains(n, "Badge") || contains(n, "Trim")) {
+                        mp.metallic = 0.0f;
+                        mp.roughness = contains(n, "Smooth") ? 0.25f : 0.6f;
+                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
+                    }
+                    // DEFAULT: neutral dielectric, no flake. Kills stray fringing (incl. disc).
+                    mp.metallic = 0.0f; mp.roughness = 0.5f;
+                    mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f;
+                }
+            };
+            for (SceneObject& obj : g_sceneObjects) {
+                assignMaterialRoles(obj.materials);
+            }
+        }
+
         g_sceneLights.push_back({ "fPointLightA", { 2.0f, 1.5f, 2.0f }, { 1.0f, 0.0f, 0.0f }, 8.0f, 5.0f });
         g_sceneLights.push_back({ "fPointLightB", { -2.0f, 1.5f, 2.0f }, { 0.0f, 0.0f, 1.0f }, 8.0f, 5.0f });
         g_sceneLights.push_back({ "fPointLightC", { 0.0f, 2.5f, -2.0f }, { 0.0f, 1.0f, 0.0f }, 8.0f, 5.0f });
@@ -1137,7 +1251,7 @@ int main() {
                     ImGui::Combo("Debug View", &g_debugView, debugViewNames, IM_ARRAYSIZE(debugViewNames));
                 
                     ImGui::Separator();
-                    ImGui::Text("SSR (CP1 mirror)");
+                    ImGui::Text("SSR");
                     ImGui::Checkbox("SSR enabled", &g_ssrEnabled);
                     ImGui::SliderFloat("Reflectivity", &g_ssrReflectivity, 0.0f, 1.0f);
                     ImGui::SliderInt("Max steps", &g_ssrMaxSteps, 8, 256);

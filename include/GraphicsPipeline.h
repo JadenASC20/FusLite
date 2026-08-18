@@ -28,6 +28,7 @@ public:
     std::vector<VkDescriptorSet> CreateDescriptorSetsForMaterial(
         const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
         const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture,
+        const VulkanTexture& normalTexture,
         const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
         const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
         const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer,
