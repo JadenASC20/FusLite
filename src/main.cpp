@@ -34,6 +34,8 @@
 #include <SSRPipeline.h>
 #include <HiZPipeline.h>
 #include <filesystem>
+#include <random>
+#include <SSAOPipeline.h>
 
 #define GLFW_INCLUDE_NONE
 #define SCENE_HERO_MCLAREN 1   // 0 = shaderballs scene, 1 = McLaren scene
@@ -94,8 +96,12 @@ static int   g_ssrMaxSteps = 64;
 static float g_ssrStepSize = 0.25f;
 static float g_ssrThickness = 0.5f;
 
-const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth", "SSR" };
+static bool  g_ssaoEnabled = true;
+static float g_ssaoRadius = 0.5f;
+static float g_ssaoBias = 0.025f;
+static float g_ssaoPower = 1.5f;
 
+const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth", "SSR", "SSAO" };
 #if SCENE_HERO_MCLAREN
 
 const std::vector<std::string> modelPaths = {
@@ -191,7 +197,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     DebugViewPipeline& debugPipeline, int debugMode,
     const SSRPipeline& ssrPipeline, const Camera& camera,
     bool ssrEnabled, float ssrReflectivity, int ssrMaxSteps, float ssrStepSize, float ssrThickness, 
-    const HiZPipeline& hizPipeline)
+    const HiZPipeline& hizPipeline, const SSAOPipeline& ssaoPipeline, float ssaoRadius, float ssaoBias, float ssaoPower)
 {
 
     VkExtent2D extent = swapchain.GetExtent();
@@ -216,6 +222,9 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     VkImage ssrImage = renderResources.GetSSRImages()[imageIndex];
     VkImageView ssrView = renderResources.GetSSRImageViews()[imageIndex];
 
+    VkImage ssaoImage = renderResources.GetSSAOImages()[imageIndex];
+    VkImageView ssaoView = renderResources.GetSSAOImageViews()[imageIndex];
+
     VkImage compositeImage = renderResources.GetCompositeImages()[imageIndex];
     VkImageView compositeView = renderResources.GetCompositeImageViews()[imageIndex];
 
@@ -229,6 +238,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         case 3: debugView = normalView; break;
         case 4: debugView = depthView; break;   // needs the depth->read barrier
         case 5: debugView = ssrView; break;
+        case 6: debugView = ssaoView; break;
     }
 
     VkCommandBufferBeginInfo beginInfo{};
@@ -406,6 +416,43 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
             renderResources.GetHiZBaseExtent(),
             renderResources.GetHiZMipLevels(),
             0.1f, 1000.0f);
+
+        // --- SSAO pass (depth + normal already SHADER_READ from SSR setup) ---
+        TransitionImage(cmd, ssaoImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        {
+            VkRenderingAttachmentInfo aoAtt{};
+            aoAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            aoAtt.imageView = ssaoView;
+            aoAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            aoAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            aoAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo aoRI{};
+            aoRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            aoRI.renderArea = { {0,0}, extent };
+            aoRI.layerCount = 1; aoRI.colorAttachmentCount = 1; aoRI.pColorAttachments = &aoAtt;
+            vkCmdBeginRendering(cmd, &aoRI);
+            vkCmdSetViewport(cmd, 0, 1, &vpD);
+            vkCmdSetScissor(cmd, 0, 1, &scD);
+            SSAOPipeline::SSAOPush ap{};
+            ap.proj = camera.GetProjectionMatrixNoJitter();
+            ap.invProj = glm::inverse(ap.proj);
+            ap.view = camera.GetViewMatrix();
+            ap.screenSize = glm::vec2((float)extent.width, (float)extent.height);
+            ap.radius = ssaoRadius; ap.bias = ssaoBias; ap.power = ssaoPower;
+            ssaoPipeline.Bind(cmd, imageIndex, ap);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+        }
+        // AO -> shader read (for debug view / later composite)
+        TransitionImage(cmd, ssaoImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
         // SSR target -> color attachment
         TransitionImage(cmd, ssrImage,
@@ -845,6 +892,66 @@ int main() {
         vkDestroyShaderModule(context.GetDevice(), ssrFrag, nullptr);
         vkDestroyShaderModule(context.GetDevice(), compFrag, nullptr);
 
+        // --- SSAO setup ---
+        const int SSAO_KERNEL_SIZE = 32;
+        std::vector<glm::vec4> ssaoKernel(SSAO_KERNEL_SIZE);
+        {
+            std::uniform_real_distribution<float> rnd(0.0f, 1.0f);
+            std::default_random_engine gen;
+            for (int i = 0; i < SSAO_KERNEL_SIZE; i++) {
+                glm::vec3 sample(rnd(gen) * 2.0f - 1.0f, rnd(gen) * 2.0f - 1.0f, rnd(gen));
+                sample = glm::normalize(sample) * rnd(gen);
+                float scale = float(i) / float(SSAO_KERNEL_SIZE);
+                scale = glm::mix(0.1f, 1.0f, scale * scale);
+                ssaoKernel[i] = glm::vec4(sample * scale, 0.0f);
+            }
+        }
+        BufferAndMemory ssaoKernelBuffer = context.CreateUniformBuffer(sizeof(glm::vec4) * SSAO_KERNEL_SIZE);
+        {
+            void* p;
+            vkMapMemory(context.GetDevice(), ssaoKernelBuffer.memory, 0, sizeof(glm::vec4) * SSAO_KERNEL_SIZE, 0, &p);
+            memcpy(p, ssaoKernel.data(), sizeof(glm::vec4) * SSAO_KERNEL_SIZE);
+            vkUnmapMemory(context.GetDevice(), ssaoKernelBuffer.memory);
+        }
+
+        const int SSAO_NOISE_DIM = 4;
+        std::vector<unsigned char> noisePixels(SSAO_NOISE_DIM * SSAO_NOISE_DIM * 4);
+        {
+            std::uniform_real_distribution<float> rnd(0.0f, 1.0f);
+            std::default_random_engine gen;
+            for (int i = 0; i < SSAO_NOISE_DIM * SSAO_NOISE_DIM; i++) {
+                noisePixels[i * 4 + 0] = (unsigned char)((rnd(gen)) * 255.0f);
+                noisePixels[i * 4 + 1] = (unsigned char)((rnd(gen)) * 255.0f);
+                noisePixels[i * 4 + 2] = 0;
+                noisePixels[i * 4 + 3] = 255;
+            }
+        }
+        VulkanTexture ssaoNoiseTex = context.CreateTextureFromRawRGBA(
+            noisePixels.data(), SSAO_NOISE_DIM, SSAO_NOISE_DIM, false);
+        // Noise must TILE — CreateTextureSampler likely clamps. Make a repeat sampler.
+        VkSampler ssaoNoiseSampler;
+        {
+            VkSamplerCreateInfo ns{};
+            ns.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+            ns.magFilter = VK_FILTER_NEAREST; ns.minFilter = VK_FILTER_NEAREST;
+            ns.addressModeU = ns.addressModeV = ns.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            ns.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+            ns.minLod = 0.0f; ns.maxLod = VK_LOD_CLAMP_NONE;
+            if (vkCreateSampler(context.GetDevice(), &ns, nullptr, &ssaoNoiseSampler) != VK_SUCCESS)
+                throw std::runtime_error("Failed to create SSAO noise sampler");
+        }
+
+        VkShaderModule ssaoVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
+        VkShaderModule ssaoFragSM = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/ssao.frag.spv");
+        SSAOPipeline ssaoPipeline;
+        ssaoPipeline.Init(context, renderPass.GetSSAOFormat(),
+            ssaoVert, ssaoFragSM,
+            renderPass.GetDepthImageViews(), renderPass.GetNormalImageViews(),
+            ssaoNoiseTex.view, ssaoNoiseSampler,
+            ssaoKernelBuffer, SSAO_KERNEL_SIZE);
+        vkDestroyShaderModule(context.GetDevice(), ssaoVert, nullptr);
+        vkDestroyShaderModule(context.GetDevice(), ssaoFragSM, nullptr);
+
         // TAA resolve pipeline
         VkShaderModule resolveVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
         VkShaderModule resolveFrag = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/taa_resolve.frag.spv");
@@ -1239,6 +1346,13 @@ int main() {
                     ImGui::SliderInt("Max steps", &g_ssrMaxSteps, 8, 256);
                     ImGui::SliderFloat("Step size", &g_ssrStepSize, 0.02f, 1.0f, "%.3f");
                     ImGui::SliderFloat("Thickness", &g_ssrThickness, 0.05f, 2.0f, "%.3f");
+                    
+                    ImGui::Separator();
+                    ImGui::Text("SSAO");
+                    ImGui::Checkbox("SSAO enabled", &g_ssaoEnabled);
+                    ImGui::SliderFloat("AO radius", &g_ssaoRadius, 0.05f, 2.0f, "%.3f");
+                    ImGui::SliderFloat("AO bias", &g_ssaoBias, 0.0f, 0.1f, "%.3f");
+                    ImGui::SliderFloat("AO power", &g_ssaoPower, 0.5f, 4.0f, "%.2f");
                 }
                 ImGui::End();
 
@@ -1347,7 +1461,7 @@ int main() {
                 shadowMap, shadowPipeline, lightViewProj, skybox, showcaseSpheres, g_sceneObjects,
                 imguiManager, g_showGui, g_renderParams, tonemapMode, g_exposure, frameInFlight,
                 debugPipeline, g_debugView, ssrPipeline, camera, g_ssrEnabled, g_ssrReflectivity, g_ssrMaxSteps, g_ssrStepSize, g_ssrThickness,
-                hizPipeline);
+                hizPipeline, ssaoPipeline, g_ssaoRadius, g_ssaoBias, g_ssaoPower);
             
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
                 g_prevModelMatrices[i] = g_sceneObjects[i].transform;
@@ -1413,6 +1527,11 @@ int main() {
 
         hizPipeline.Cleanup();
         vkDestroySampler(context.GetDevice(), hizSampler, nullptr);
+
+        ssaoPipeline.Cleanup();
+        ssaoKernelBuffer.Destroy(context.GetDevice());
+        ssaoNoiseTex.Destroy(context.GetDevice());
+        vkDestroySampler(context.GetDevice(), ssaoNoiseSampler, nullptr);
 
         swapchain.Cleanup();
     }

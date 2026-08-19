@@ -85,6 +85,7 @@ add_executable(FusLite
     src/core/DebugViewPipeline.cpp
     src/core/SSRPipeline.cpp
     src/core/HiZPipeline.cpp
+    src/core/SSAOPipeline.cpp
 
     # ImGui core
     ${IMGUI_DIR}/imgui.cpp

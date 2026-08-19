@@ -43,6 +43,12 @@ public:
     const std::vector<VkImageView>& GetSSRImageViews() const { return m_ssrImageViews; }
     VkFormat GetSSRFormat() const { return m_ssrFormat; }
 
+    const std::vector<VkImage>& GetSSAOImages() const { return m_ssaoImages; }
+    const std::vector<VkImageView>& GetSSAOImageViews() const { return m_ssaoImageViews; }
+    const std::vector<VkImage>& GetSSAOBlurImages() const { return m_ssaoBlurImages; }
+    const std::vector<VkImageView>& GetSSAOBlurImageViews() const { return m_ssaoBlurImageViews; }
+    VkFormat GetSSAOFormat() const { return m_ssaoFormat; }
+
     const std::vector<VkImage>& GetCompositeImages() const { return m_compositeImages; }
     const std::vector<VkImageView>& GetCompositeImageViews() const { return m_compositeImageViews; }
     VkFormat GetCompositeFormat() const { return m_compositeFormat; }
@@ -69,6 +75,7 @@ private:
     void CreateCompositeResources(const Swapchain& swapchain);
     void CreateHiZResources(const Swapchain& swapchain);
     void CreateMaterialResources(const Swapchain& swapchain);
+    void CreateSSAOResources(const Swapchain& swapchain);
 
     VulkanContext* m_context = nullptr;
 
@@ -127,4 +134,12 @@ private:
     std::vector<VkImage> m_materialImages;
     std::vector<VkDeviceMemory> m_materialMemory;
     std::vector<VkImageView> m_materialImageViews;
+
+    VkFormat m_ssaoFormat = VK_FORMAT_R8_UNORM;
+    std::vector<VkImage> m_ssaoImages;
+    std::vector<VkDeviceMemory> m_ssaoMemory;
+    std::vector<VkImageView> m_ssaoImageViews;
+    std::vector<VkImage> m_ssaoBlurImages;
+    std::vector<VkDeviceMemory> m_ssaoBlurMemory;
+    std::vector<VkImageView> m_ssaoBlurImageViews;
 };

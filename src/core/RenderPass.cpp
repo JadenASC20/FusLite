@@ -19,6 +19,7 @@ void RenderPass::Init(VulkanContext& context, const Swapchain& swapchain)
     CreateMaterialResources(swapchain);
     CreateSSRResources(swapchain);
     CreateCompositeResources(swapchain);
+    CreateSSAOResources(swapchain);
     CreateHiZResources(swapchain);
     CreateHistoryResources(swapchain);
     CreateLuminanceResources();
@@ -494,6 +495,64 @@ void RenderPass::CreateCompositeResources(const Swapchain& swapchain)
     printf("%zu composite resource(s) created.\n", numImages);
 }
 
+void RenderPass::CreateSSAOResources(const Swapchain& swapchain)
+{
+    VkExtent2D extent = swapchain.GetExtent();
+    size_t numImages = swapchain.GetImageViews().size();
+
+    auto makeTargets = [&](std::vector<VkImage>& images,
+        std::vector<VkDeviceMemory>& memories,
+        std::vector<VkImageView>& views)
+    {
+        images.resize(numImages);
+        memories.resize(numImages);
+        views.resize(numImages);
+        for (size_t i = 0; i < numImages; i++) {
+            VkImageCreateInfo imageInfo{};
+            imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+            imageInfo.imageType = VK_IMAGE_TYPE_2D;
+            imageInfo.extent = { extent.width, extent.height, 1 };
+            imageInfo.mipLevels = 1;
+            imageInfo.arrayLayers = 1;
+            imageInfo.format = m_ssaoFormat;
+            imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+            imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (vkCreateImage(m_context->GetDevice(), &imageInfo, nullptr, &images[i]) != VK_SUCCESS)
+                throw std::runtime_error("Failed to create SSAO image");
+
+            VkMemoryRequirements memReq;
+            vkGetImageMemoryRequirements(m_context->GetDevice(), images[i], &memReq);
+            VkMemoryAllocateInfo allocInfo{};
+            allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            allocInfo.allocationSize = memReq.size;
+            allocInfo.memoryTypeIndex = m_context->FindMemoryType(
+                memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            if (vkAllocateMemory(m_context->GetDevice(), &allocInfo, nullptr, &memories[i]) != VK_SUCCESS)
+                throw std::runtime_error("Failed to allocate SSAO image memory");
+            vkBindImageMemory(m_context->GetDevice(), images[i], memories[i], 0);
+
+            VkImageViewCreateInfo viewInfo{};
+            viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            viewInfo.image = images[i];
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = m_ssaoFormat;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.layerCount = 1;
+            if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &views[i]) != VK_SUCCESS)
+                throw std::runtime_error("Failed to create SSAO image view");
+        }
+    };
+
+    makeTargets(m_ssaoImages, m_ssaoMemory, m_ssaoImageViews);
+    makeTargets(m_ssaoBlurImages, m_ssaoBlurMemory, m_ssaoBlurImageViews);
+
+    printf("%zu SSAO resource(s) created x2 (raw + blur, R8_UNORM).\n", numImages);
+}
+
 void RenderPass::CreateHiZResources(const Swapchain& swapchain)
 {
     VkExtent2D extent = swapchain.GetExtent();
@@ -685,6 +744,13 @@ void RenderPass::Cleanup()
     m_compositeImages.clear(); 
     m_compositeMemory.clear(); 
     m_compositeImageViews.clear();
+
+    for (auto view : m_ssaoImageViews) vkDestroyImageView(m_context->GetDevice(), view, nullptr);
+    for (auto img : m_ssaoImages) vkDestroyImage(m_context->GetDevice(), img, nullptr);
+    for (auto mem : m_ssaoMemory) vkFreeMemory(m_context->GetDevice(), mem, nullptr);
+    for (auto view : m_ssaoBlurImageViews) vkDestroyImageView(m_context->GetDevice(), view, nullptr);
+    for (auto img : m_ssaoBlurImages) vkDestroyImage(m_context->GetDevice(), img, nullptr);
+    for (auto mem : m_ssaoBlurMemory) vkFreeMemory(m_context->GetDevice(), mem, nullptr);
 
     for (auto v : m_hizMipViews) vkDestroyImageView(m_context->GetDevice(), v, nullptr);
     m_hizMipViews.clear();
