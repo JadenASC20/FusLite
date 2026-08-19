@@ -9,227 +9,233 @@
 #include <cstdio>
 #include <filesystem>
 
-// NOTE: added a trailing out-param `foundTexture` so the caller can record whether a
-// real texture backed this slot (drives the "show slider only if no map" UI rule)
-// without issuing a second GetTexture query.
-VulkanTexture Model::LoadMaterialTexture(VulkanContext& context, const aiScene* scene, aiMaterial* material,
-    aiTextureType type, const std::filesystem::path& modelDir, const char* debugLabel, bool isColorData)
+#define CGLTF_IMPLEMENTATION
+#include "cgltf.h"
+
+
+static bool DecodeCgltfImage(VulkanContext& context, const cgltf_data* data,
+    const cgltf_image* image, const std::filesystem::path& modelDir,
+    bool isColorData, VulkanTexture& outTex)
 {
-    aiString texPath;
-    bool found = material->GetTexture(type, 0, &texPath) == AI_SUCCESS;
-    if (found) {
-        const aiTexture* embeddedTex = scene->GetEmbeddedTexture(texPath.C_Str());
-        if (embeddedTex) {
-            printf("Loading embedded %s texture: %s\n", debugLabel, texPath.C_Str());
-            if (embeddedTex->mHeight == 0) {
-                return context.CreateTextureFromMemory(
-                    reinterpret_cast<const unsigned char*>(embeddedTex->pcData),
-                    embeddedTex->mWidth, isColorData);
-            }
-            else {
-                return context.CreateTextureFromRawRGBA(
-                    reinterpret_cast<const unsigned char*>(embeddedTex->pcData),
-                    embeddedTex->mWidth, embeddedTex->mHeight, isColorData);
-            }
-        }
-        else {
-            std::filesystem::path fullPath = modelDir / texPath.C_Str();
-            printf("Loading %s texture: %s\n", debugLabel, fullPath.string().c_str());
-            return context.CreateTexture(fullPath.string().c_str(), isColorData);
-        }
-    }
-    // Sensible defaults when the material has no texture for this slot
-    if (type == aiTextureType_METALNESS || type == aiTextureType_DIFFUSE_ROUGHNESS) {
-        // Neutral metallic-roughness: R=unused, G=roughness=0.5, B=metallic=0.0
-        printf("Material has no %s texture, using default (roughness 0.5, non-metal)\n", debugLabel);
-        return context.CreateSolidColorTexture(0.0f, 1.0f, 1.0f, 1.0f, false);
+    if (!image) return false;
+
+    // embedded in a buffer view (for .glb)
+    if (image->buffer_view) {
+        const cgltf_buffer_view* bv = image->buffer_view;
+        const uint8_t* base = static_cast<const uint8_t*>(bv->buffer->data);
+        const uint8_t* imgData = base + bv->offset;
+        // These bytes are an encoded PNG/JPG blob use your memory (compressed) path.
+        outTex = context.CreateTextureFromMemory(imgData,
+            static_cast<uint32_t>(bv->size), isColorData);
+        return true;
     }
 
-    if (type == aiTextureType_NORMALS) {
+    // external / data-URI file referenced by uri
+    if (image->uri) {
+        // data: URIs would need base64 decode; for this asset (glb) we expect file paths.
+        std::filesystem::path fullPath = modelDir / image->uri;
+        outTex = context.CreateTexture(fullPath.string().c_str(), isColorData);
+        return true;
+    }
+    return false;
+}
+
+VulkanTexture Model::LoadCgltfTexture(VulkanContext& context, const cgltf_data* data,
+    const cgltf_texture_view* texView, const std::filesystem::path& modelDir,
+    const char* debugLabel, bool isColorData)
+{
+    if (texView && texView->texture && texView->texture->image) {
+        VulkanTexture tex;
+        printf("Loading %s texture\n", debugLabel);
+        if (DecodeCgltfImage(context, data, texView->texture->image, modelDir, isColorData, tex))
+            return tex;
+    }
+
+    // Defaults matching your Assimp loader's fallbacks.
+    if (std::string(debugLabel) == "metallic-roughness") {
+        printf("Material has no %s texture, using default (roughness 1.0, non-metal)\n", debugLabel);
+        // R=unused, G=roughness=1, B=metallic=0 scalar drives via multiply
+        return context.CreateSolidColorTexture(0.0f, 1.0f, 0.0f, 1.0f, false);
+    }
+    if (std::string(debugLabel) == "normal") {
         return context.CreateSolidColorTexture(0.5f, 0.5f, 1.0f, 1.0f, false);
     }
-    
-    // TEMP DIAGNOSTIC: dump every texture slot Assimp sees for this material
-    printf("  --- texture slots for '%s' ---\n", material->GetName().C_Str());
-    for (int t = aiTextureType_NONE; t <= aiTextureType_TRANSMISSION; t++) {
-        unsigned int count = material->GetTextureCount((aiTextureType)t);
-        if (count > 0) {
-            aiString p;
-            material->GetTexture((aiTextureType)t, 0, &p);
-            printf("    type %d: count=%u path='%s'\n", t, count, p.C_Str());
-        }
-    }
-
-    aiColor4D baseColor(1.0f, 1.0f, 1.0f, 1.0f);
-    material->Get(AI_MATKEY_BASE_COLOR, baseColor);
-    material->Get(AI_MATKEY_COLOR_DIFFUSE, baseColor);
-    printf("Material has no %s texture, using flat color [%.2f %.2f %.2f]\n",
-        debugLabel, baseColor.r, baseColor.g, baseColor.b);
-    return context.CreateSolidColorTexture(baseColor.r, baseColor.g, baseColor.b, baseColor.a, true);
+    // diffuse fallback: flat white (role table / factors will tint)
+    printf("Material has no %s texture, using flat white\n", debugLabel);
+    return context.CreateSolidColorTexture(1.0f, 1.0f, 1.0f, 1.0f, true);
 }
 
 void Model::LoadFromFile(VulkanContext& context, const std::string& path)
 {
-    Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(path,
-        aiProcess_Triangulate |
-        aiProcess_GenSmoothNormals |
-        aiProcess_JoinIdenticalVertices |
-        aiProcess_CalcTangentSpace |
-        aiProcess_FlipUVs
-    );
-    if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
-        throw std::runtime_error("Assimp failed to load: " + std::string(importer.GetErrorString()));
+    cgltf_options options = {};
+    cgltf_data* data = nullptr;
+    cgltf_result res = cgltf_parse_file(&options, path.c_str(), &data);
+    if (res != cgltf_result_success) {
+        throw std::runtime_error("cgltf failed to parse: " + path);
+    }
+    res = cgltf_load_buffers(&options, data, path.c_str());
+    if (res != cgltf_result_success) {
+        cgltf_free(data);
+        throw std::runtime_error("cgltf failed to load buffers: " + path);
     }
 
     std::filesystem::path modelDir = std::filesystem::path(path).parent_path();
-    m_diffuseTextures.resize(scene->mNumMaterials);
-    m_normalTextures.resize(scene->mNumMaterials);
-    m_metallicRoughnessTextures.resize(scene->mNumMaterials);
-    m_materials.resize(scene->mNumMaterials);
 
-    for (unsigned int m = 0; m < scene->mNumMaterials; m++) {
-        aiMaterial* material = scene->mMaterials[m];
-        const char* matName = material->GetName().C_Str();
-        printf("Material %u ('%s'):\n", m, matName);
-       
-        
-        // Detect presence of a real texture up front (drives UI + params).
-        aiString tmp;
-        bool hasBaseColorTex = material->GetTexture(aiTextureType_BASE_COLOR, 0, &tmp) == AI_SUCCESS;
-        bool hasDiffuseTex = material->GetTexture(aiTextureType_DIFFUSE, 0, &tmp) == AI_SUCCESS;
-        bool hasMetalTex = material->GetTexture(aiTextureType_METALNESS, 0, &tmp) == AI_SUCCESS;
-        bool hasRoughTex = material->GetTexture(aiTextureType_DIFFUSE_ROUGHNESS, 0, &tmp) == AI_SUCCESS;
-        bool hasNormalTex = material->GetTexture(aiTextureType_NORMALS, 0, &tmp) == AI_SUCCESS;
-        bool hasUnknownTex = material->GetTexture(aiTextureType_UNKNOWN, 0, &tmp) == AI_SUCCESS;  // split/packed often here
+    // Materials
+    size_t matCount = data->materials_count;
+    m_diffuseTextures.resize(matCount);
+    m_normalTextures.resize(matCount);
+    m_metallicRoughnessTextures.resize(matCount);
+    m_materials.resize(matCount);
 
-        // Diffuse/base color — sRGB, since it's a visual color
-        aiTextureType diffuseType = hasBaseColorTex ? aiTextureType_BASE_COLOR : aiTextureType_DIFFUSE;
-        m_diffuseTextures[m] = LoadMaterialTexture(context, scene, material, diffuseType, modelDir, "diffuse", true);
+    for (size_t m = 0; m < matCount; m++) {
+        const cgltf_material& mat = data->materials[m];
+        const char* matName = mat.name ? mat.name : "";
+        printf("Material %zu ('%s'):\n", m, matName);
 
-        // Metallic-roughness — linear data, NOT sRGB
-        m_metallicRoughnessTextures[m] = LoadMaterialTexture(context, scene, material,
-            aiTextureType_METALNESS, modelDir, "metallic-roughness", false);
+        const cgltf_pbr_metallic_roughness& pbr = mat.pbr_metallic_roughness;
 
-        m_normalTextures[m] = LoadMaterialTexture(context, scene, material,
-            aiTextureType_NORMALS, modelDir, "normal", false);  // linear, NOT sRGB
+        // Diffuse / base color (sRGB)
+        m_diffuseTextures[m] = LoadCgltfTexture(context, data,
+            &pbr.base_color_texture, modelDir, "diffuse", true);
 
-        // Seed editable params from the asset.
+        // Metallic-roughness (linear). glTF packs it as one texture: G=roughness, B=metallic.
+        m_metallicRoughnessTextures[m] = LoadCgltfTexture(context, data,
+            &pbr.metallic_roughness_texture, modelDir, "metallic-roughness", false);
+
+        // Normal (linear)
+        m_normalTextures[m] = LoadCgltfTexture(context, data,
+            &mat.normal_texture, modelDir, "normal", false);
+
         MaterialParams mp;
         mp.name = (matName && matName[0]) ? matName : ("Material " + std::to_string(m));
-        mp.hasDiffuseTexture = hasBaseColorTex || hasDiffuseTex;
-        mp.hasMRTexture = hasMetalTex || hasRoughTex || hasUnknownTex;
-        mp.hasNormalMap = hasNormalTex;
-        
-        // Pull scalar factors so sliders start at the asset's authored values.
-        // (These are ignored by the shader where a texture is bound, but give sane
-        // starting points for materials that have no map.)
-        float rough = 0.5f, metal = 0.0f;
-        material->Get(AI_MATKEY_ROUGHNESS_FACTOR, rough);
-        material->Get(AI_MATKEY_METALLIC_FACTOR, metal);
-        mp.roughness = rough;
-        mp.metallic = metal;
+        mp.hasDiffuseTexture = (pbr.base_color_texture.texture != nullptr);
+        mp.hasMRTexture = (pbr.metallic_roughness_texture.texture != nullptr);
+        mp.hasNormalMap = (mat.normal_texture.texture != nullptr);
 
-        aiUVTransform transform;
-        if (material->Get(AI_MATKEY_UVTRANSFORM(aiTextureType_NORMALS, 0), transform) == AI_SUCCESS) {
-            mp.normalUVScale = glm::vec2(transform.mScaling.x, transform.mScaling.y);
-            mp.normalUVOffset = glm::vec2(transform.mTranslation.x, transform.mTranslation.y);
+        // Seed scalar factors from the asset (role table may overwrite these — keeping role table for now).
+        mp.roughness = pbr.roughness_factor;
+        mp.metallic = pbr.metallic_factor;
+        mp.colorTint = glm::vec3(pbr.base_color_factor[0],
+            pbr.base_color_factor[1],
+            pbr.base_color_factor[2]);
+
+        // KHR_texture_transform on the NORMAL texture your existing per-material UV transform.
+        if (mat.normal_texture.has_transform) {
+            const cgltf_texture_transform& tt = mat.normal_texture.transform;
+            mp.normalUVScale = glm::vec2(tt.scale[0], tt.scale[1]);
+            mp.normalUVOffset = glm::vec2(tt.offset[0], tt.offset[1]);
         }
         else {
             mp.normalUVScale = glm::vec2(1.0f);
             mp.normalUVOffset = glm::vec2(0.0f);
         }
 
-        aiColor4D base(1.0f, 1.0f, 1.0f, 1.0f);
-        if (material->Get(AI_MATKEY_BASE_COLOR, base) == AI_SUCCESS ||
-            material->Get(AI_MATKEY_COLOR_DIFFUSE, base) == AI_SUCCESS) {
-            mp.colorTint = glm::vec3(base.r, base.g, base.b);
-        }
-
-        printf("  mat %u UVtransform stored: scale(%.1f,%.1f) offset(%.1f,%.1f)\n",
-            m, mp.normalUVScale.x, mp.normalUVScale.y, mp.normalUVOffset.x, mp.normalUVOffset.y);
-
         m_materials[m] = mp;
     }
 
-    // Geometry
+    // Helper to map a cgltf_material* back to its index in data->materials.
+    auto materialIndex = [&](const cgltf_material* mp) -> int {
+        if (!mp) return 0;
+        return static_cast<int>(mp - data->materials);
+    };
+
+    // Geometry (flat: one submesh per primitive, node transforms ignored)
     std::vector<Vertex> allVertices;
     std::vector<uint32_t> allIndices;
-    for (unsigned int m = 0; m < scene->mNumMeshes; m++) {
-        const aiMesh* mesh = scene->mMeshes[m];
-        printf("Mesh %u: %u UV channels\n", m, mesh->GetNumUVChannels());
-        SubMesh sub{};
-        sub.firstIndex = static_cast<uint32_t>(allIndices.size());
-        sub.vertexOffset = static_cast<int32_t>(allVertices.size());
-        sub.materialIndex = static_cast<int>(mesh->mMaterialIndex);
-        for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
-            Vertex v{};
-            v.pos[0] = mesh->mVertices[i].x;
-            v.pos[1] = mesh->mVertices[i].y;
-            v.pos[2] = mesh->mVertices[i].z;
 
-            if (mesh->HasNormals()) {
-                v.normal[0] = mesh->mNormals[i].x;
-                v.normal[1] = mesh->mNormals[i].y;
-                v.normal[2] = mesh->mNormals[i].z;
+    for (size_t mi = 0; mi < data->meshes_count; mi++) {
+        const cgltf_mesh& mesh = data->meshes[mi];
+        for (size_t pi = 0; pi < mesh.primitives_count; pi++) {
+            const cgltf_primitive& prim = mesh.primitives[pi];
+            if (prim.type != cgltf_primitive_type_triangles) continue;
+
+            SubMesh sub{};
+            sub.firstIndex = static_cast<uint32_t>(allIndices.size());
+            sub.vertexOffset = static_cast<int32_t>(allVertices.size());
+            sub.materialIndex = materialIndex(prim.material);
+
+            // Find attribute accessors.
+            const cgltf_accessor* posAcc = cgltf_find_accessor(&prim, cgltf_attribute_type_position, 0);
+            const cgltf_accessor* nrmAcc = cgltf_find_accessor(&prim, cgltf_attribute_type_normal, 0);
+            const cgltf_accessor* uv0Acc = cgltf_find_accessor(&prim, cgltf_attribute_type_texcoord, 0);
+            const cgltf_accessor* uv1Acc = cgltf_find_accessor(&prim, cgltf_attribute_type_texcoord, 1);
+            const cgltf_accessor* tanAcc = cgltf_find_accessor(&prim, cgltf_attribute_type_tangent, 0);
+
+            if (!posAcc) continue;
+            size_t vcount = posAcc->count;
+
+            // Prefer UV channel 1 when present (matches your Assimp-era heuristic).
+            const cgltf_accessor* uvAcc = uv1Acc ? uv1Acc : uv0Acc;
+
+            for (size_t i = 0; i < vcount; i++) {
+                Vertex v{};
+
+                float p[3] = { 0,0,0 };
+                cgltf_accessor_read_float(posAcc, i, p, 3);
+                v.pos[0] = p[0]; v.pos[1] = p[1]; v.pos[2] = p[2];
+
+                if (nrmAcc) {
+                    float n[3] = { 0,1,0 };
+                    cgltf_accessor_read_float(nrmAcc, i, n, 3);
+                    v.normal[0] = n[0]; v.normal[1] = n[1]; v.normal[2] = n[2];
+                }
+                else {
+                    v.normal[0] = 0; v.normal[1] = 1; v.normal[2] = 0;
+                }
+
+                v.color[0] = 1; v.color[1] = 1; v.color[2] = 1;
+
+                if (uvAcc) {
+                    float uv[2] = { 0,0 };
+                    cgltf_accessor_read_float(uvAcc, i, uv, 2);
+                    v.texCoord[0] = uv[0]; v.texCoord[1] = uv[1];
+                }
+                else {
+                    v.texCoord[0] = 0; v.texCoord[1] = 0;
+                }
+
+                if (tanAcc) {
+                    float t[4] = { 1,0,0,1 };
+                    cgltf_accessor_read_float(tanAcc, i, t, 4);
+                    // glTF TANGENT is xyz + w handedness — exactly your Vertex.tangent layout.
+                    v.tangent[0] = t[0]; v.tangent[1] = t[1];
+                    v.tangent[2] = t[2]; v.tangent[3] = t[3];
+                }
+                else {
+                    v.tangent[0] = 1; v.tangent[1] = 0; v.tangent[2] = 0; v.tangent[3] = 1;
+                }
+
+                allVertices.push_back(v);
+            }
+
+            // Indices (local to this primitive; vertexOffset handles the base).
+            if (prim.indices) {
+                size_t icount = prim.indices->count;
+                for (size_t i = 0; i < icount; i++) {
+                    allIndices.push_back(static_cast<uint32_t>(
+                        cgltf_accessor_read_index(prim.indices, i)));
+                }
             }
             else {
-                v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
+                // Non-indexed: sequential.
+                for (size_t i = 0; i < vcount; i++)
+                    allIndices.push_back(static_cast<uint32_t>(i));
             }
 
-            v.color[0] = 1.0f; 
-            v.color[1] = 1.0f; 
-            v.color[2] = 1.0f;
-
-            if (mesh->HasTextureCoords(1)) {
-                v.texCoord[0] = mesh->mTextureCoords[1][i].x;
-                v.texCoord[1] = mesh->mTextureCoords[1][i].y;
-            }
-            else if (mesh->HasTextureCoords(0)) {
-                v.texCoord[0] = mesh->mTextureCoords[0][i].x;
-                v.texCoord[1] = mesh->mTextureCoords[0][i].y;
-            }
-            else {
-                v.texCoord[0] = 0.0f; v.texCoord[1] = 0.0f;
-            }
-
-            if (mesh->HasTangentsAndBitangents()) {
-                v.tangent[0] = mesh->mTangents[i].x;
-                v.tangent[1] = mesh->mTangents[i].y;
-                v.tangent[2] = mesh->mTangents[i].z;
-                // Handedness: sign of dot(cross(N,T), bitangent). Determines which way B points.
-                aiVector3D n = mesh->mNormals[i];
-                aiVector3D t = mesh->mTangents[i];
-                aiVector3D b = mesh->mBitangents[i];
-                aiVector3D nCrossT(
-                    n.y * t.z - n.z * t.y,
-                    n.z * t.x - n.x * t.z,
-                    n.x * t.y - n.y * t.x);
-                float handed = (nCrossT.x * b.x + nCrossT.y * b.y + nCrossT.z * b.z) < 0.0f ? -1.0f : 1.0f;
-                v.tangent[3] = handed;
-            }
-            else {
-                v.tangent[0] = 1.0f; v.tangent[1] = 0.0f; v.tangent[2] = 0.0f; v.tangent[3] = 1.0f;
-            }
-
-            allVertices.push_back(v);
+            sub.indexCount = static_cast<uint32_t>(allIndices.size()) - sub.firstIndex;
+            m_subMeshes.push_back(sub);
         }
-        for (unsigned int f = 0; f < mesh->mNumFaces; f++) {
-            const aiFace& face = mesh->mFaces[f];
-            for (unsigned int idx = 0; idx < face.mNumIndices; idx++) {
-                allIndices.push_back(face.mIndices[idx]);
-            }
-        }
-        sub.indexCount = static_cast<uint32_t>(allIndices.size()) - sub.firstIndex;
-        m_subMeshes.push_back(sub);
     }
+
+    cgltf_free(data);
+
     m_vertexBuffer = context.CreateVertexBuffer(allVertices.data(), sizeof(Vertex) * allVertices.size());
     m_indexBuffer = context.CreateIndexBuffer(allIndices.data(), sizeof(uint32_t) * allIndices.size());
-
     m_vertexCount = static_cast<uint32_t>(allVertices.size());
     m_triangleCount = static_cast<uint32_t>(allIndices.size() / 3);
 
-    printf("Model loaded: %s (%zu submeshes, %zu materials, %u vertices, %u tris)\n",
+    printf("Model loaded (cgltf): %s (%zu submeshes, %zu materials, %u vertices, %u tris)\n",
         path.c_str(), m_subMeshes.size(), m_materials.size(), m_vertexCount, m_triangleCount);
 }
 

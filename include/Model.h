@@ -4,7 +4,6 @@
 #include <vector>
 #include <string>
 #include <filesystem>
-#include <assimp/material.h>
 #include "Buffer.h"
 #include "Vertex.h"
 #include "VulkanTexture.h"
@@ -12,10 +11,9 @@
 #include "RenderParams.h"  
 #include "MaterialParams.h"
 
+
 class VulkanContext;
 class GraphicsPipeline;
-struct aiScene;
-struct aiMaterial;
 
 struct SubMesh
 {
@@ -24,6 +22,9 @@ struct SubMesh
     int32_t  vertexOffset;
     int      materialIndex;
 };
+
+struct cgltf_data;
+struct cgltf_texture_view;
 
 class Model
 {
@@ -49,8 +50,9 @@ public:
     uint32_t GetTriangleCount() const { return m_triangleCount; }
 
 private:
-    VulkanTexture LoadMaterialTexture(VulkanContext& context, const aiScene* scene, aiMaterial* material,
-        aiTextureType type, const std::filesystem::path& modelDir, const char* debugLabel, bool isColorData);
+    VulkanTexture LoadCgltfTexture(VulkanContext& context, const struct cgltf_data* data,
+        const struct cgltf_texture_view* texView, const std::filesystem::path& modelDir,
+        const char* debugLabel, bool isColorData);
 
     BufferAndMemory m_vertexBuffer;
     BufferAndMemory m_indexBuffer;
