@@ -5,13 +5,15 @@ layout(binding = 2) uniform sampler2D normalTex;   // world normal, [0,1]
 layout(binding = 3) uniform sampler2D depthTex;    // scene depth [0,1]
 layout(binding = 4) uniform samplerCube prefilteredMap;  // IBL prefiltered specular
 layout(binding = 5) uniform sampler2D materialTex; // R=roughness, G=metallic
+layout(binding = 6) uniform sampler2D ssaoTex;  
 
 layout(push_constant) uniform CompPush {
     mat4 invProj;
     mat4 invView;
-    vec4 cameraPos;     // xyz = camera world pos
+    vec4 cameraPos;
     float reflectivity;
-    float _p0, _p1, _p2;
+    float aoStrength;
+    float _p1, _p2;
 } pc;
 
 layout(location = 0) in vec2 inUV;
@@ -65,5 +67,10 @@ void main()
     // (tires, interior) reflect weakly while smooth surfaces (paint, chrome) reflect strongly.
     // The global slider is now a master over per-material-correct strengths.
     float reflStrength = pow(1.0 - roughness, 2.0);           // smooth=1, rough=0
-    outColor = vec4(hdr + reflection * F * reflStrength, 1.0);
+    
+    float ao = texture(ssaoTex, inUV).r;
+    ao = pow(ao, 4.0);
+    outColor = vec4((hdr + reflection * F * reflStrength) * ao, 1.0);
+    return;
+
 }

@@ -34,6 +34,7 @@ public:
         const std::vector<VkImageView>& depthViews,
         const std::vector<VkImageView>& normalViews,
         const std::vector<VkImageView>& ssrViews,
+        const std::vector<VkImageView>& ssaoViews,
         VkImageView hizSampleView,
         VkImageView prefilteredCubeView, VkSampler cubeSampler,
         const std::vector<VkImageView>& materialViews);

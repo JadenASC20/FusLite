@@ -86,6 +86,7 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
     const std::vector<VkImageView>& depthViews,
     const std::vector<VkImageView>& normalViews,
     const std::vector<VkImageView>& ssrViews,
+    const std::vector<VkImageView>& ssaoViews,
     VkImageView hizSampleView,
     VkImageView prefilteredCubeView, VkSampler cubeSampler,
     const std::vector<VkImageView>& materialViews)
@@ -108,12 +109,12 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
     // hdr, depth, normal, hiz, material
     m_ssrSetLayout = MakeSampledLayout(m_device, 5); 
 
-    m_compSetLayout = MakeSampledLayout(m_device, 6); // hdr, ssr, normal, depth, cube, material
+    m_compSetLayout = MakeSampledLayout(m_device, 7); // hdr, ssr, normal, depth, cube, material, ao
 
     // Pool: sampled descriptors per swapchain image
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = n * 11; // (5 SSR + 6 Composite)
+    ps.descriptorCount = n * 12; // (5 SSR + 7 Composite)
     VkDescriptorPoolCreateInfo pInfo{};
     pInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pInfo.poolSizeCount = 1; 
@@ -172,13 +173,13 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
             throw std::runtime_error("Failed to allocate composite sets");
         
         for (uint32_t i = 0; i < n; i++) {
-            VkDescriptorImageInfo imgs[6]{};
-            VkImageView views[6] = { hdrViews[i], ssrViews[i], normalViews[i], depthViews[i],
-                                     prefilteredCubeView, materialViews[i] };
-            VkSampler samps[6] = { m_sampler, m_sampler, m_sampler, m_sampler, cubeSampler, m_sampler };
-            VkWriteDescriptorSet w[6]{};
+            VkDescriptorImageInfo imgs[7]{};
+            VkImageView views[7] = { hdrViews[i], ssrViews[i], normalViews[i], depthViews[i],
+                                     prefilteredCubeView, materialViews[i], ssaoViews[i]};
+            VkSampler samps[7] = { m_sampler, m_sampler, m_sampler, m_sampler, cubeSampler, m_sampler, m_sampler };
+            VkWriteDescriptorSet w[7]{};
             
-            for (int b = 0; b < 6; b++) {
+            for (int b = 0; b < 7; b++) {
                 imgs[b].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
                 imgs[b].imageView = views[b]; 
                 imgs[b].sampler = samps[b];
@@ -189,7 +190,7 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
                 w[b].descriptorCount = 1; 
                 w[b].pImageInfo = &imgs[b];
             }
-            vkUpdateDescriptorSets(m_device, 6, w, 0, nullptr);
+            vkUpdateDescriptorSets(m_device, 7, w, 0, nullptr);
         }
     }
 

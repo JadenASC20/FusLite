@@ -885,6 +885,7 @@ int main() {
             ssrVert, ssrFrag, compFrag,
             renderPass.GetHdrImageViews(), renderPass.GetDepthImageViews(),
             renderPass.GetNormalImageViews(), renderPass.GetSSRImageViews(), 
+            renderPass.GetSSAOImageViews(),
             renderPass.GetHiZSampleView(), iblTextures.prefilteredSpecular.view,
             iblTextures.prefilteredSpecular.sampler, renderPass.GetMaterialImageViews());
 
