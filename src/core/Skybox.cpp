@@ -109,7 +109,7 @@ void Skybox::Init(VulkanContext& context, GLFWwindow* window, VkFormat colorForm
 {
     m_device = context.GetDevice();
 
-    m_cubemap = context.CreateEquirectangularCubemap(equirectFilename, 512);
+    m_cubemap = context.CreateEquirectangularCubemap(equirectFilename, 2048);
 
     m_uniformBuffers.resize(numImages);
     for (auto& ubo : m_uniformBuffers) {

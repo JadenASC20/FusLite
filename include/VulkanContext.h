@@ -74,7 +74,7 @@ public:
     VulkanTexture CreateTextureFromRawRGBA(const unsigned char* pixels, uint32_t width, uint32_t height, bool isColorData);
     VulkanTexture CreateSolidColorTexture(float r, float g, float b, float a, bool isColorData);
 
-    VulkanTexture CreateEquirectangularCubemap(const char* filename, uint32_t faceSize = 512);
+    VulkanTexture CreateEquirectangularCubemap(const char* filename, uint32_t faceSize = 1024);
 
     struct IBLTextures
     {

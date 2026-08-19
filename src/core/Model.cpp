@@ -101,6 +101,7 @@ void Model::LoadFromFile(VulkanContext& context, const std::string& path)
         bool hasMetalTex = material->GetTexture(aiTextureType_METALNESS, 0, &tmp) == AI_SUCCESS;
         bool hasRoughTex = material->GetTexture(aiTextureType_DIFFUSE_ROUGHNESS, 0, &tmp) == AI_SUCCESS;
         bool hasNormalTex = material->GetTexture(aiTextureType_NORMALS, 0, &tmp) == AI_SUCCESS;
+        bool hasUnknownTex = material->GetTexture(aiTextureType_UNKNOWN, 0, &tmp) == AI_SUCCESS;  // split/packed often here
 
         // Diffuse/base color — sRGB, since it's a visual color
         aiTextureType diffuseType = hasBaseColorTex ? aiTextureType_BASE_COLOR : aiTextureType_DIFFUSE;
@@ -117,7 +118,7 @@ void Model::LoadFromFile(VulkanContext& context, const std::string& path)
         MaterialParams mp;
         mp.name = (matName && matName[0]) ? matName : ("Material " + std::to_string(m));
         mp.hasDiffuseTexture = hasBaseColorTex || hasDiffuseTex;
-        mp.hasMRTexture = hasMetalTex || hasRoughTex;
+        mp.hasMRTexture = hasMetalTex || hasRoughTex || hasUnknownTex;
         mp.hasNormalMap = hasNormalTex;
         
         // Pull scalar factors so sliders start at the asset's authored values.

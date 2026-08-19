@@ -910,7 +910,6 @@ bool VulkanContext::CheckDynamicRenderingSupport(VkPhysicalDevice device)
     return false;
 }
 
-// Converts a cubemap face UV (in [-1,1]) + face index into a 3D direction vector
 static glm::vec3 CubeFaceDirection(int face, float u, float v)
 {
     switch (face) {
@@ -923,7 +922,6 @@ static glm::vec3 CubeFaceDirection(int face, float u, float v)
     }
 }
 
-// Bilinear sample of an equirectangular float image at a given direction
 static void SampleEquirect(const float* pixels, int width, int height, int channels, glm::vec3 dir, float* outRGBA)
 {
     float phi = atan2f(dir.z, dir.x);          // -PI..PI
@@ -1382,7 +1380,7 @@ VulkanTexture VulkanContext::CreatePrefilteredSpecularCubemap(const float* equir
 
     std::vector<std::vector<float>> mipFaceData(mipLevels);
     std::vector<uint32_t> mipSizes(mipLevels);
-    const uint32_t sampleCount = 32;
+    const uint32_t sampleCount = 256;
 
     for (uint32_t mip = 0; mip < mipLevels; mip++) {
         uint32_t faceSize = std::max(1u, baseFaceSize >> mip);
@@ -1501,9 +1499,9 @@ VulkanContext::IBLTextures VulkanContext::CreateIBLFromEquirect(const char* file
     printf("Building IBL data from %s (%dx%d)...\n", filename, width, height);
 
     IBLTextures result;
-    result.prefilteredMipLevels = 5;
+    result.prefilteredMipLevels = 8;
     result.irradiance = CreateIrradianceCubemap(pixels, width, height, channels, 32);
-    result.prefilteredSpecular = CreatePrefilteredSpecularCubemap(pixels, width, height, channels, 128, result.prefilteredMipLevels);
+    result.prefilteredSpecular = CreatePrefilteredSpecularCubemap(pixels, width, height, channels, 256, result.prefilteredMipLevels);
     result.brdfLUT = CreateBRDFLUT(128);
 
     stbi_image_free(pixels);

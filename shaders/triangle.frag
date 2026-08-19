@@ -149,6 +149,9 @@ vec3 EvaluateDirectLight(vec3 N, vec3 V, vec3 L, vec3 radiance, vec3 albedo, flo
 // Clearcoat layer: a second, much smoother specular lobe on top of the base material
 const float CLEARCOAT_F0 = 0.04;
 
+const float IBL_DIFFUSE_STRENGTH  = 1.0;
+const float IBL_SPECULAR_STRENGTH = 1.0;
+
 float DistributionGGX_Clearcoat(vec3 N, vec3 H, float roughness)
 {
     // Identical math to the base DistributionGGX — factored separately so the
@@ -435,19 +438,26 @@ void main() {
 
     // IBL ambient
     vec3 R = reflect(-V, N);
-    const float MAX_REFLECTION_LOD = 4.0;
+    const float MAX_REFLECTION_LOD = 7.0;
 
     vec3 F_ibl = FresnelSchlickRoughness(NdotV, F0, roughness);
     vec3 kD_ibl = (1.0 - F_ibl) * (1.0 - metallic);
 
     vec3 irradianceSample = texture(irradianceMap, N).rgb;
-    vec3 diffuseIBL = irradianceSample * albedo;
+    vec3 diffuseIBL  = irradianceSample * albedo * IBL_DIFFUSE_STRENGTH;
 
-    vec3 prefilteredColor = textureLod(prefilteredMap, R, roughness * MAX_REFLECTION_LOD).rgb;
+    
+    float lod = pow(roughness, 0.15) * MAX_REFLECTION_LOD;
+    vec3 prefilteredColor = textureLod(prefilteredMap, R, lod).rgb;
+    // push the roughest surfaces all the way to fully-diffuse environment:
+    vec3 superBlur = texture(irradianceMap, R).rgb;
+    prefilteredColor = mix(prefilteredColor, superBlur, clamp(roughness * 1.5, 0.0, 1.0));
+
     vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
+    
     vec3 specularIBL = prefilteredColor * (F0 * brdf.x + brdf.y);
-
-    vec3 ambient = kD_ibl * diffuseIBL + specularIBL;
+    specularIBL *= IBL_SPECULAR_STRENGTH;   // replace the (1.0 - roughness) with a flat global cut
+    vec3 ambient = kD_ibl * diffuseIBL + specularIBL;    
     float ambientOcclusion = mix(0.35, 1.0, surfaceShadow);
     vec3 finalColor = ambient * ambientOcclusion + outgoing;
 

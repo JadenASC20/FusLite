@@ -1024,7 +1024,7 @@ int main() {
                         mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
                     }
                     if (contains(n, "Rim") || contains(n, "Wheel")) {
-                        mp.metallic = 0.0f; mp.roughness = 0.70f;
+                        if (!texDriven) { mp.metallic = 1.0f; mp.roughness = 0.70f; }
                         mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
                     }
                     if (contains(n, "Calliper") || contains(n, "Caliper")) {
