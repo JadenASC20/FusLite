@@ -8,6 +8,8 @@ layout(binding = 0) uniform sampler2D hdrTex;     // lit scene (what we reflect)
 layout(binding = 1) uniform sampler2D depthTex;   // scene depth (nonlinear [0,1])
 layout(binding = 2) uniform sampler2D normalTex;  // world-space geometric normal, [0,1]-encoded
 layout(binding = 3) uniform sampler2D hizTex;     // Hi-Z pyramid: R=min linear depth, G=max linear depth
+layout(binding = 4) uniform sampler2D materialTex; // R=roughness, G=metallic
+
 
 layout(push_constant) uniform SSRPush {
     mat4 invProj;      // inverse of NO-JITTER projection
@@ -54,6 +56,9 @@ void main()
     vec3 viewN   = normalize(mat3(pc.view) * worldN);
     vec3 viewDir = normalize(viewPos);
     vec3 reflDir = reflect(viewDir, viewN);
+
+    float roughness = texture(materialTex, inUV).r;
+    if (roughness > 0.4) { outSSR = vec4(0.0); return; }   // tune threshold
 
     // March the reflection ray. We advance in view space but use the Hi-Z pyramid
     // to skip empty space: at each step, read the min/max linear depth of the current

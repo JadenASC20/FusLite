@@ -61,5 +61,9 @@ void main()
     vec4 ssr = texture(ssrTex, inUV); // rgb = hit color, a = hit mask
     vec3 reflection = mix(iblReflection, ssr.rgb, ssr.a); // SSR where hit, IBL where miss
 
-    outColor = vec4(hdr + reflection * F * pc.reflectivity, 1.0);
+    // Roughness attenuates reflection MAGNITUDE (not just blur), so rough surfaces
+    // (tires, interior) reflect weakly while smooth surfaces (paint, chrome) reflect strongly.
+    // The global slider is now a master over per-material-correct strengths.
+    float reflStrength = pow(1.0 - roughness, 2.0);           // smooth=1, rough=0
+    outColor = vec4(hdr + reflection * F * reflStrength, 1.0);
 }

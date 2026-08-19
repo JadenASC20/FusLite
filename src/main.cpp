@@ -102,7 +102,7 @@ const std::vector<std::string> modelPaths = {
     "assets/McLarenShowcaseDemo/McLaren.glb",
     "assets/McLarenShowcaseDemo/McLarenStage.glb"
 };
-const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenAutoshop.hdr";
+const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenGarage.hdr";
 #else
 const std::vector<std::string> modelPaths = {
     "assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj",
@@ -1004,67 +1004,39 @@ int main() {
             auto contains = [](const std::string& hay, const char* needle) {
                 return hay.find(needle) != std::string::npos;
             };
+            
             auto assignMaterialRoles = [&](std::vector<MaterialParams>& mats) {
                 for (MaterialParams& mp : mats) {
                     const std::string& n = mp.name;
-                    bool texDriven = mp.hasMRTexture;
+                    // metallic / roughness / colorTint now come from cgltf material factors.
+                    // This table only assigns clearcoat + flake, which have no glTF-core source.
 
-                    if (contains(n, "Glass") || contains(n, "Window")) {
-                        mp.metallic = 0.0f; mp.roughness = 0.05f;
-                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
-                    }
+                    // default: no clearcoat, no flake
+                    mp.clearcoatFactor = 0.0f;
+                    mp.clearcoatRoughness = 0.03f;
+                    mp.flakeStrength = 0.0f;
+                    mp.flakeScale = 400.0f;
+
                     if (contains(n, "CarPaint") && !contains(n, "Trim")) {
-                        if (!texDriven) { mp.metallic = 0.0f; mp.roughness = 0.35f; }
                         mp.clearcoatFactor = 1.0f; mp.clearcoatRoughness = 0.04f;
                         mp.flakeStrength = 0.10f; mp.flakeScale = 1000.0f;
-                        continue;
                     }
-                    if (contains(n, "Chrome") || contains(n, "Mirror")) {
-                        mp.metallic = 1.0f; mp.roughness = 0.35f;
-                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
-                    }
-                    if (contains(n, "Rim") || contains(n, "Wheel")) {
-                        if (!texDriven) { mp.metallic = 1.0f; mp.roughness = 0.70f; }
-                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
-                    }
-                    if (contains(n, "Calliper") || contains(n, "Caliper")) {
-                        mp.metallic = 0.0f; mp.roughness = 0.35f;
-                        mp.clearcoatFactor = 0.6f; mp.clearcoatRoughness = 0.10f;
-                        mp.flakeStrength = 0.0f; continue;
-                    }
-                    if (contains(n, "Carbon")) {
-                        mp.metallic = 0.0f; mp.roughness = 0.30f;
+                    else if (contains(n, "Carbon")) {
                         mp.clearcoatFactor = 0.8f; mp.clearcoatRoughness = 0.08f;
-                        mp.flakeStrength = 0.0f; continue;
                     }
-                    if (contains(n, "Aluminum") || contains(n, "Engine") || contains(n, "Chassis")) {
-                        mp.metallic = 1.0f; mp.roughness = 0.6f;
-                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
-                    }
-                    if (contains(n, "PianoBlack")) {
-                        mp.metallic = 0.0f; mp.roughness = 0.08f;
+                    else if (contains(n, "PianoBlack")) {
                         mp.clearcoatFactor = 1.0f; mp.clearcoatRoughness = 0.04f;
-                        mp.flakeStrength = 0.0f; continue;
                     }
-                    if (contains(n, "Light")) {
-                        mp.metallic = 0.0f; mp.roughness = 0.15f;
-                        mp.clearcoatFactor = 0.5f; mp.flakeStrength = 0.0f; continue;
+                    else if (contains(n, "Calliper") || contains(n, "Caliper")) {
+                        mp.clearcoatFactor = 0.6f; mp.clearcoatRoughness = 0.10f;
                     }
-                    if (contains(n, "Interior")) {
-                        mp.metallic = 0.0f; mp.roughness = 0.6f;
-                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
+                    else if (contains(n, "Light")) {
+                        mp.clearcoatFactor = 0.5f;
                     }
-                    if (contains(n, "Plastic") || contains(n, "Grille") ||
-                        contains(n, "Badge") || contains(n, "Trim")) {
-                        mp.metallic = 0.0f;
-                        mp.roughness = contains(n, "Smooth") ? 0.25f : 0.6f;
-                        mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f; continue;
-                    }
-                    // DEFAULT: neutral dielectric, no flake. Kills stray fringing (incl. disc).
-                    mp.metallic = 0.0f; mp.roughness = 0.5f;
-                    mp.clearcoatFactor = 0.0f; mp.flakeStrength = 0.0f;
+                    // everything else: no clearcoat, no flake (defaults above)
                 }
             };
+
             for (SceneObject& obj : g_sceneObjects) {
                 assignMaterialRoles(obj.materials);
             }

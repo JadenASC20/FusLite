@@ -105,15 +105,15 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
     if (vkCreateSampler(m_device, &s, nullptr, &m_sampler) != VK_SUCCESS)
         throw std::runtime_error("Failed to create SSR sampler");
 
-    // hdr, depth, normal, hiz
-    m_ssrSetLayout = MakeSampledLayout(m_device, 4); 
+    // hdr, depth, normal, hiz, material
+    m_ssrSetLayout = MakeSampledLayout(m_device, 5); 
 
     m_compSetLayout = MakeSampledLayout(m_device, 6); // hdr, ssr, normal, depth, cube, material
 
     // Pool: sampled descriptors per swapchain image
     VkDescriptorPoolSize ps{};
     ps.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps.descriptorCount = n * 10; // (4 SSR + 6 Composite)
+    ps.descriptorCount = n * 11; // (5 SSR + 6 Composite)
     VkDescriptorPoolCreateInfo pInfo{};
     pInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pInfo.poolSizeCount = 1; 
@@ -137,22 +137,24 @@ void SSRPipeline::Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrF
             throw std::runtime_error("Failed to allocate SSR sets");
         
         for (uint32_t i = 0; i < n; i++) {
-            VkDescriptorImageInfo imgs[4]{};
-            VkImageView views[4] = { hdrViews[i], depthViews[i], normalViews[i], hizSampleView };
-            VkWriteDescriptorSet w[4]{};
-            
-            for (int b = 0; b < 4; b++) {
+            VkDescriptorImageInfo imgs[5]{};                                    // was 4
+            VkImageView views[5] = { hdrViews[i], depthViews[i],               // was 4
+                                     normalViews[i], hizSampleView,
+                                     materialViews[i] };                        // NEW binding 4
+            VkWriteDescriptorSet w[5]{};                                        // was 4
+
+            for (int b = 0; b < 5; b++) {                                       // was 4
                 imgs[b].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                imgs[b].imageView = views[b]; 
+                imgs[b].imageView = views[b];
                 imgs[b].sampler = m_sampler;
                 w[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
                 w[b].dstSet = m_ssrSets[i];
                 w[b].dstBinding = b;
                 w[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-                w[b].descriptorCount = 1; 
+                w[b].descriptorCount = 1;
                 w[b].pImageInfo = &imgs[b];
             }
-            vkUpdateDescriptorSets(m_device, 4, w, 0, nullptr);
+            vkUpdateDescriptorSets(m_device, 5, w, 0, nullptr);                 // was 4
         }
     }
 
