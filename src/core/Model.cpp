@@ -109,6 +109,11 @@ void Model::LoadFromFile(VulkanContext& context, const std::string& path)
 
         MaterialParams mp;
         mp.name = (matName && matName[0]) ? matName : ("Material " + std::to_string(m));
+
+        auto nameHas = [&](const char* s) { return mp.name.find(s) != std::string::npos; };
+
+        mp.isGlass = (nameHas("Glass") || nameHas("Window")) && !nameHas("Opaque");
+        if (mp.isGlass) printf("  -> tagged GLASS: %s\n", mp.name.c_str());
         mp.hasDiffuseTexture = (pbr.base_color_texture.texture != nullptr);
         mp.hasMRTexture = (pbr.metallic_roughness_texture.texture != nullptr);
         mp.hasNormalMap = (mat.normal_texture.texture != nullptr);
@@ -254,7 +259,7 @@ void Model::CreateDescriptorSets(GraphicsPipeline& pipeline,
     }
 }
 
-void Model::Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
+void Model::DrawOpaque(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
     RenderParams base, const std::vector<MaterialParams>& mats) const
 {
     VkBuffer vertexBuffers[] = { m_vertexBuffer.buffer };
@@ -293,6 +298,87 @@ void Model::Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
         vkCmdDrawIndexed(commandBuffer, sub.indexCount, 1, sub.firstIndex, sub.vertexOffset, 0);
     }
 }
+
+void Model::DrawTransparent(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
+    RenderParams base, const std::vector<MaterialParams>& mats) const
+{
+    VkBuffer vertexBuffers[] = { m_vertexBuffer.buffer };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(commandBuffer, m_indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+    for (const auto& sub : m_subMeshes) {
+        // Guard: submesh material index must be in range of the provided params.
+        const MaterialParams& mp =
+            (sub.materialIndex >= 0 && sub.materialIndex < static_cast<int>(mats.size()))
+            ? mats[sub.materialIndex]
+            : mats.front();
+
+        // Overwrite only the per-material fields; leave frame params in `base` intact.
+        base.colorTint = glm::vec4(mp.colorTint, 0.0f);
+        base.roughness = mp.roughness;
+        base.metallic = mp.metallic;
+        base.clearcoatFactor = mp.clearcoatFactor;
+        base.clearcoatRoughness = mp.clearcoatRoughness;
+        base.flakeStrength = mp.flakeStrength;
+        base.flakeScale = mp.flakeScale;
+        base.normalUVTransform = glm::vec4(
+            mp.normalUVScale.x, mp.normalUVScale.y,
+            mp.normalUVOffset.x, mp.normalUVOffset.y);
+
+
+        VkDescriptorSet set = m_descriptorSets[sub.materialIndex][imageIndex];
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
+            0, 1, &set, 0, nullptr);
+
+        // Same push range as GraphicsPipeline::PushParams: FRAGMENT stage, offset 0.
+        vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(RenderParams), &base);
+
+        vkCmdDrawIndexed(commandBuffer, sub.indexCount, 1, sub.firstIndex, sub.vertexOffset, 0);
+    }
+}
+
+void Model::DrawFiltered(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
+    RenderParams base, const std::vector<MaterialParams>& mats) const
+{
+    VkBuffer vertexBuffers[] = { m_vertexBuffer.buffer };
+    VkDeviceSize offsets[] = { 0 };
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+    vkCmdBindIndexBuffer(commandBuffer, m_indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+    for (const auto& sub : m_subMeshes) {
+        // Guard: submesh material index must be in range of the provided params.
+        const MaterialParams& mp =
+            (sub.materialIndex >= 0 && sub.materialIndex < static_cast<int>(mats.size()))
+            ? mats[sub.materialIndex]
+            : mats.front();
+
+        // Overwrite only the per-material fields; leave frame params in `base` intact.
+        base.colorTint = glm::vec4(mp.colorTint, 0.0f);
+        base.roughness = mp.roughness;
+        base.metallic = mp.metallic;
+        base.clearcoatFactor = mp.clearcoatFactor;
+        base.clearcoatRoughness = mp.clearcoatRoughness;
+        base.flakeStrength = mp.flakeStrength;
+        base.flakeScale = mp.flakeScale;
+        base.normalUVTransform = glm::vec4(
+            mp.normalUVScale.x, mp.normalUVScale.y,
+            mp.normalUVOffset.x, mp.normalUVOffset.y);
+
+
+        VkDescriptorSet set = m_descriptorSets[sub.materialIndex][imageIndex];
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout,
+            0, 1, &set, 0, nullptr);
+
+        // Same push range as GraphicsPipeline::PushParams: FRAGMENT stage, offset 0.
+        vkCmdPushConstants(commandBuffer, pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(RenderParams), &base);
+
+        vkCmdDrawIndexed(commandBuffer, sub.indexCount, 1, sub.firstIndex, sub.vertexOffset, 0);
+    }
+}
+
 
 void Model::DrawGeometryOnly(VkCommandBuffer commandBuffer) const
 {

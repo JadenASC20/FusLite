@@ -361,7 +361,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     pipeline.PushParams(cmd, params);
 
     for (size_t i = 0; i < showcaseSpheres.size(); i++) {
-        showcaseSpheres[i].Draw(cmd, pipeline.GetLayout(), imageIndex, params, sceneObjects[i].materials);
+        showcaseSpheres[i].DrawOpaque(cmd, pipeline.GetLayout(), imageIndex, params, sceneObjects[i].materials);
     }
     vkCmdEndRendering(cmd);
 

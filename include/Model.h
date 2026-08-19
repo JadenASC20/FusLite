@@ -36,7 +36,9 @@ public:
         const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer,
         VkImageView shadowMapView, VkSampler shadowMapSampler, const BufferAndMemory& rampBuffer);
 
-    void Draw(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
+    void DrawOpaque(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
+        RenderParams base, const std::vector<MaterialParams>& mats) const;
+    void DrawTransparent(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
         RenderParams base, const std::vector<MaterialParams>& mats) const;
 
     void DrawGeometryOnly(VkCommandBuffer commandBuffer) const;
@@ -53,6 +55,8 @@ private:
     VulkanTexture LoadCgltfTexture(VulkanContext& context, const struct cgltf_data* data,
         const struct cgltf_texture_view* texView, const std::filesystem::path& modelDir,
         const char* debugLabel, bool isColorData);
+    void DrawFiltered(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
+        RenderParams base, const std::vector<MaterialParams>& mats) const;
 
     BufferAndMemory m_vertexBuffer;
     BufferAndMemory m_indexBuffer;

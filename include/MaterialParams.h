@@ -19,6 +19,7 @@ struct MaterialParams
     bool hasDiffuseTexture = false;
     bool hasMRTexture = false;
     bool hasNormalMap = false;
+    bool isGlass = false;
     glm::vec2 normalUVScale = glm::vec2(1.0f);
     glm::vec2 normalUVOffset = glm::vec2(0.0f);
 };
