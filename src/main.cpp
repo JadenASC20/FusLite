@@ -102,7 +102,7 @@ const std::vector<std::string> modelPaths = {
     "assets/McLarenShowcaseDemo/McLaren.glb",
     "assets/McLarenShowcaseDemo/McLarenStage.glb"
 };
-const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenGarage.hdr";
+const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenAutoshop.hdr";
 #else
 const std::vector<std::string> modelPaths = {
     "assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj",
@@ -959,7 +959,7 @@ int main() {
             car.clearcoatFactor = 1.0f; 
             car.clearcoatRoughness = 0.05f;
             car.flakeStrength = 0.08f; 
-            car.flakeScale = 400.0f;
+            car.flakeScale = 1000.0f;
             g_sceneObjects.push_back(car);
 
             SceneObject disc;
@@ -1029,7 +1029,7 @@ int main() {
 
                     if (contains(n, "CarPaint") && !contains(n, "Trim")) {
                         mp.clearcoatFactor = 1.0f; mp.clearcoatRoughness = 0.04f;
-                        mp.flakeStrength = 0.10f; mp.flakeScale = 1000.0f;
+                        mp.flakeStrength = 0.10f; mp.flakeScale = 0.0f;
                     }
                     else if (contains(n, "Carbon")) {
                         mp.clearcoatFactor = 0.8f; mp.clearcoatRoughness = 0.08f;

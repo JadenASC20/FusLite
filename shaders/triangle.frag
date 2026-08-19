@@ -461,7 +461,20 @@ void main() {
     float ambientOcclusion = mix(0.35, 1.0, surfaceShadow);
     vec3 finalColor = ambient * ambientOcclusion + outgoing;
 
-    outColor = vec4(finalColor, pc.colorTint.a);   // was 1.0
+    if (pc.colorTint.a < 0.999) {
+        // Environment reflection, Fresnel-weighted but capped so it never fully replaces the surface.
+        vec3 glassRefl = textureLod(prefilteredMap, R, 0.0).rgb;   // mip 0 = sharp
+        float fresnel = pow(1.0 - NdotV, 5.0);
+        float reflAmount = mix(0.0, 0.4, fresnel);   // 15% face-on, up to 60% at edges — never 100%
+        finalColor = mix(finalColor, glassRefl, reflAmount);
+
+        // Alpha stays low and CONSTANT so glass is always see-through.
+        // (Optional slight bump at grazing edges, but keep the face see-through.)
+        float glassAlpha = mix(pc.colorTint.a, 0.1, fresnel);   // 0.25 face-on  0.6 at edges (not 1.0)
+        outColor = vec4(finalColor, glassAlpha);
+    } else {
+        outColor = vec4(finalColor, pc.colorTint.a);
+    }
     
     // DEBUGGING
     // outColor = vec4(texture(normalSampler, fragTexCoord).xyz, 1.0);
