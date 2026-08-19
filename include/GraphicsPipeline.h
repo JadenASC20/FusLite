@@ -35,7 +35,9 @@ public:
         VkImageView shadowMapView, VkSampler shadowMapSampler, const BufferAndMemory& rampBuffer);
 
     void PushParams(VkCommandBuffer commandBuffer, const RenderParams& params) const;
-
+    void BindTransparent(VkCommandBuffer cb) const {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_transparentPipeline);
+    }
 private:
     void CreateDescriptorSetLayout();
     void CreateDescriptorPool(uint32_t maxSets);
@@ -46,4 +48,7 @@ private:
 
     VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
+
+    VkPipeline m_transparentPipeline = VK_NULL_HANDLE;
+
 };

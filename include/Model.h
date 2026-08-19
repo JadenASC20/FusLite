@@ -55,8 +55,10 @@ private:
     VulkanTexture LoadCgltfTexture(VulkanContext& context, const struct cgltf_data* data,
         const struct cgltf_texture_view* texView, const std::filesystem::path& modelDir,
         const char* debugLabel, bool isColorData);
-    void DrawFiltered(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
-        RenderParams base, const std::vector<MaterialParams>& mats) const;
+
+    void DrawFilteredImpl(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
+        uint32_t imageIndex, RenderParams base, const std::vector<MaterialParams>& mats,
+        bool wantGlass) const;
 
     BufferAndMemory m_vertexBuffer;
     BufferAndMemory m_indexBuffer;

@@ -461,7 +461,7 @@ void main() {
     float ambientOcclusion = mix(0.35, 1.0, surfaceShadow);
     vec3 finalColor = ambient * ambientOcclusion + outgoing;
 
-    outColor = vec4(finalColor, 1.0);
+    outColor = vec4(finalColor, pc.colorTint.a);   // was 1.0
     
     // DEBUGGING
     // outColor = vec4(texture(normalSampler, fragTexCoord).xyz, 1.0);

@@ -443,6 +443,36 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
         throw std::runtime_error("Failed to create graphics pipeline");
     }
 
+    // Transparent variant: depth-write OFF + alpha blending on color attachment
+    VkPipelineDepthStencilStateCreateInfo depthStencilTransparent = depthStencil;
+    depthStencilTransparent.depthWriteEnable = VK_FALSE;
+
+    // Blend state for glass: attachment 0 (HDR) alpha-blends; others keep writing opaquely for now.
+    VkPipelineColorBlendAttachmentState blendAttachmentsT[4]{};
+    for (int i = 0; i < 4; i++) {
+        blendAttachmentsT[i].blendEnable = VK_TRUE;
+        blendAttachmentsT[i].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        blendAttachmentsT[i].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        blendAttachmentsT[i].colorBlendOp = VK_BLEND_OP_ADD;
+        blendAttachmentsT[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        blendAttachmentsT[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        blendAttachmentsT[i].alphaBlendOp = VK_BLEND_OP_ADD;
+        blendAttachmentsT[i].colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    }
+
+    VkPipelineColorBlendStateCreateInfo colorBlendingTransparent = colorBlending;
+    colorBlendingTransparent.pAttachments = blendAttachmentsT;   // attachmentCount stays 4
+
+    VkGraphicsPipelineCreateInfo transparentInfo = pipelineInfo;
+    transparentInfo.pDepthStencilState = &depthStencilTransparent;
+    transparentInfo.pColorBlendState = &colorBlendingTransparent;
+
+    if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &transparentInfo, nullptr, &m_transparentPipeline) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create transparent graphics pipeline");
+    }
+
     printf("Graphics pipeline created (dynamic rendering).\n");
 }
 
@@ -471,6 +501,11 @@ void GraphicsPipeline::Cleanup()
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
+    }
+
+    if (m_transparentPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_device, m_transparentPipeline, nullptr);
+        m_transparentPipeline = VK_NULL_HANDLE;
     }
 }
 
