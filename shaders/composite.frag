@@ -34,6 +34,28 @@ vec3 ReconstructWorldPos(vec2 uv, float depth) {
     return world.xyz;
 }
 
+// Depth-aware 4x4 blur of the AO buffer. Rejects samples across depth
+// discontinuities so AO doesn't bleed across silhouette edges. Runs here in
+// composite (no separate pass) — reuses depthTex already bound at binding 3.
+float BlurAO(vec2 uv, float centerDepth) {
+    vec2 texel = 1.0 / vec2(textureSize(ssaoTex, 0));
+    float sum = 0.0;
+    float weight = 0.0;
+    for (int x = -2; x < 2; x++) {
+        for (int y = -2; y < 2; y++) {
+            vec2 o = vec2(float(x), float(y)) * texel;
+            float sd = texture(depthTex, uv + o).r;
+            // Relative depth reject. Nonlinear depth, so scale the threshold by
+            // depth (differences shrink with distance); tuneable constant.
+            if (abs(sd - centerDepth) < 0.001) {
+                sum += texture(ssaoTex, uv + o).r;
+                weight += 1.0;
+            }
+        }
+    }
+    return (weight > 0.0) ? (sum / weight) : texture(ssaoTex, uv).r;
+}
+
 void main()
 {
     vec3 hdr = texture(hdrTex, inUV).rgb;
@@ -68,9 +90,13 @@ void main()
     // The global slider is now a master over per-material-correct strengths.
     float reflStrength = pow(1.0 - roughness, 2.0);           // smooth=1, rough=0
     
-    float ao = texture(ssaoTex, inUV).r;
-    ao = pow(ao, 4.0);
+    float centerDepth = texture(depthTex, inUV).r;   // or reuse your existing depth sample
+    
+    float ao = BlurAO(inUV, centerDepth);
+    ao = pow(ao, 4.0);    
+    ao = mix(1.0, ao, pc.aoStrength);
     outColor = vec4((hdr + reflection * F * reflStrength) * ao, 1.0);
+
     return;
 
 }

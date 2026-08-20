@@ -101,6 +101,8 @@ static float g_ssaoRadius = 0.5f;
 static float g_ssaoBias = 0.025f;
 static float g_ssaoPower = 1.5f;
 
+static bool g_customShadowEnabled = false;
+
 const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth", "SSR", "SSAO" };
 #if SCENE_HERO_MCLAREN
 
@@ -530,6 +532,7 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
         cpc.invView = glm::inverse(camera.GetViewMatrix());
         cpc.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
         cpc.reflectivity = ssrReflectivity;
+        cpc.aoStrength = g_ssaoEnabled ? 1.0f : 0.0f;
         ssrPipeline.BindComposite(cmd, imageIndex, cpc);
 
         vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -1289,10 +1292,10 @@ int main() {
                     );
                 }
 
-                // Window 1: Debug
+                // Window 1: Debug Window
                 ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
-                ImGui::Begin("Debug", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                ImGui::Begin("Debug Window", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
                 {
                     ImGui::Text("Frame Time: %.2fms/frame (%.0f FPS)", 1000.0f / io.Framerate, io.Framerate);
                     static float frameTimes[90] = {};
@@ -1301,8 +1304,18 @@ int main() {
                     frameTimeOffset = (frameTimeOffset + 1) % IM_ARRAYSIZE(frameTimes);
                     ImGui::PlotLines("Frame Time Graph", frameTimes, IM_ARRAYSIZE(frameTimes), frameTimeOffset,
                         nullptr, 0.0f, 33.0f, ImVec2(0, 60));
-                    
+
                     ImGui::Separator();
+                    ImGui::Text("Debug View");
+                    ImGui::Combo("Debug View", &g_debugView, debugViewNames, IM_ARRAYSIZE(debugViewNames));
+                }
+                ImGui::End();
+
+                // Window 2: Scene Property Window
+                ImGui::SetNextWindowPos(ImVec2(20, 100), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
+                ImGui::Begin("Scene Property Window", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                {
                     ImGui::Text("Lighting (Sun)");
                     ImGui::SliderFloat3("Light Dir", &g_sunDirection.x, -1.0f, 1.0f);
                     ImGui::SliderFloat("Light Intensity", &g_sunIntensity, 0.0f, 10.0f);
@@ -1319,6 +1332,9 @@ int main() {
                     ImGui::Checkbox("Resolve enabled", &g_taaResolveEnabled);
                     ImGui::SliderFloat("Blend alpha", &g_taaBlendAlpha, 0.02f, 1.0f, "%.3f");
                     ImGui::Text("Jitter phase: %d/%d", haltonIndex, TAA_JITTER_PHASES);
+
+                    ImGui::Separator();
+                    ImGui::Text("Tonemap");
                     ImGui::Combo("Tonemap", &tonemapMode, tonemapNames, IM_ARRAYSIZE(tonemapNames));
                     
                     ImGui::Separator();
@@ -1337,36 +1353,62 @@ int main() {
                         ImGui::SliderFloat("Exposure (EV)", &g_exposureEV, -4.0f, 4.0f);
                         g_exposure = exp2(g_exposureEV);
                     }
-
-                    ImGui::Combo("Debug View", &g_debugView, debugViewNames, IM_ARRAYSIZE(debugViewNames));
                 
                     ImGui::Separator();
                     ImGui::Text("SSR");
                     ImGui::Checkbox("SSR enabled", &g_ssrEnabled);
-                    ImGui::SliderFloat("Reflectivity", &g_ssrReflectivity, 0.0f, 1.0f);
-                    ImGui::SliderInt("Max steps", &g_ssrMaxSteps, 8, 256);
-                    ImGui::SliderFloat("Step size", &g_ssrStepSize, 0.02f, 1.0f, "%.3f");
-                    ImGui::SliderFloat("Thickness", &g_ssrThickness, 0.05f, 2.0f, "%.3f");
+                    if (g_ssrEnabled) {
+                        ImGui::SliderInt("Max steps", &g_ssrMaxSteps, 8, 256);
+                        ImGui::SliderFloat("Step size", &g_ssrStepSize, 0.02f, 1.0f, "%.3f");
+                        ImGui::SliderFloat("Thickness", &g_ssrThickness, 0.05f, 2.0f, "%.3f");
+                    }
                     
                     ImGui::Separator();
                     ImGui::Text("SSAO");
                     ImGui::Checkbox("SSAO enabled", &g_ssaoEnabled);
-                    ImGui::SliderFloat("AO radius", &g_ssaoRadius, 0.05f, 2.0f, "%.3f");
-                    ImGui::SliderFloat("AO bias", &g_ssaoBias, 0.0f, 0.1f, "%.3f");
-                    ImGui::SliderFloat("AO power", &g_ssaoPower, 0.5f, 4.0f, "%.2f");
+                    if (g_ssaoEnabled) {
+                        ImGui::SliderFloat("AO radius", &g_ssaoRadius, 0.05f, 2.0f, "%.3f");
+                        ImGui::SliderFloat("AO bias", &g_ssaoBias, 0.0f, 0.1f, "%.3f");
+                        ImGui::SliderFloat("AO power", &g_ssaoPower, 0.5f, 4.0f, "%.2f");
+                    }
                 }
                 ImGui::End();
 
-                //Window 2: Property Window
+                // Window 3: Scene Outliner
+                ImGui::SetNextWindowPos(ImVec2(1580, 20), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
+                ImGui::Begin("Scene Outliner", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
+                {
+                    ImGui::Text("Scene Lights:");
+                    for (int i = 0; i < static_cast<int>(g_sceneLights.size()); i++) {
+                        bool isSelected = (g_selectionType == SelectionType::Light && g_selectedIndex == i);
+                        if (ImGui::Selectable(g_sceneLights[i].name.c_str(), isSelected)) {
+                            g_selectionType = SelectionType::Light;
+                            g_selectedIndex = i;
+                        }
+                    }
 
-                ImGui::SetNextWindowPos(ImVec2(20, 420), ImGuiCond_FirstUseEver);
+                    ImGui::Separator();
+                    ImGui::Text("Scene Objects:");
+                    for (int i = 0; i < static_cast<int>(g_sceneObjects.size()); i++) {
+                        bool isSelected = (g_selectionType == SelectionType::Object && g_selectedIndex == i);
+                        if (ImGui::Selectable(g_sceneObjects[i].name.c_str(), isSelected)) {
+                            g_selectionType = SelectionType::Object;
+                            g_selectedIndex = i;
+                        }
+                    }
+                }
+                ImGui::End();
+
+                // Window 4: Model Property Window
+                ImGui::SetNextWindowPos(ImVec2(1580, 500), ImGuiCond_FirstUseEver);
                 ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
                 ImGui::Begin("Property Window", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
                 {
                     if (g_selectionType == SelectionType::Object && g_selectedIndex >= 0 && g_selectedIndex < static_cast<int>(g_sceneObjects.size())) {
                         SceneObject& obj = g_sceneObjects[g_selectedIndex];
                         ImGui::Text("Object: %s", obj.name.c_str());
-                        
+
                         ImGui::Separator();
                         ImGui::ColorEdit3("Color", &obj.colorTint.x);
                         ImGui::SliderFloat("Roughness", &obj.roughness, 0.0f, 1.0f);
@@ -1375,43 +1417,46 @@ int main() {
                         ImGui::SliderFloat("Clearcoat Roughness", &obj.clearcoatRoughness, 0.01f, 0.5f);
                         ImGui::SliderFloat("Flake Strength", &obj.flakeStrength, 0.0f, 0.3f);
                         ImGui::SliderFloat("Flake Scale", &obj.flakeScale, 50.0f, 1000.0f);
-                        
+
                         ImGui::Separator();
                         ImGui::Text("Shadow Penumbra");
-                        ImVec2 p = ImGui::GetCursorScreenPos();
-                        float w = ImGui::GetContentRegionAvail().x, h = 22.0f;
-                        ImDrawList* dl = ImGui::GetWindowDrawList();
-                        for (int s = 0; s < 48; s++) {
-                            glm::vec3 c = EvaluateRamp(obj.penumbraStops, float(s) / 47.0f);
-                            dl->AddRectFilled(ImVec2(p.x + w * s / 48.0f, p.y),
-                                ImVec2(p.x + w * (s + 1) / 48.0f, p.y + h),
-                                IM_COL32(int(c.r * 255), int(c.g * 255), int(c.b * 255), 255));
-                        }
-                        ImGui::Dummy(ImVec2(w, h + 4));
-                        for (int s = 0; s < static_cast<int>(obj.penumbraStops.size()); s++) {
-                            ImGui::PushID(s);
-                            ImGui::ColorEdit3("##col", &obj.penumbraStops[s].color.x, ImGuiColorEditFlags_NoInputs);
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(120);
-                            ImGui::SliderFloat("##pos", &obj.penumbraStops[s].position, 0.0f, 1.0f, "%.2f");
-                            if (obj.penumbraStops.size() > 2) {
-                                ImGui::SameLine();
-                                if (ImGui::SmallButton("x")) {
-                                    obj.penumbraStops.erase(obj.penumbraStops.begin() + s);
-                                    ImGui::PopID();
-                                    break;
-                                }
+                        ImGui::Checkbox("Custom Shadow Penumbra enabled", &g_customShadowEnabled);
+                        if (g_customShadowEnabled) {
+                            ImVec2 p = ImGui::GetCursorScreenPos();
+                            float w = ImGui::GetContentRegionAvail().x, h = 22.0f;
+                            ImDrawList* dl = ImGui::GetWindowDrawList();
+                            for (int s = 0; s < 48; s++) {
+                                glm::vec3 c = EvaluateRamp(obj.penumbraStops, float(s) / 47.0f);
+                                dl->AddRectFilled(ImVec2(p.x + w * s / 48.0f, p.y),
+                                    ImVec2(p.x + w * (s + 1) / 48.0f, p.y + h),
+                                    IM_COL32(int(c.r * 255), int(c.g * 255), int(c.b * 255), 255));
                             }
-                            ImGui::PopID();
+                            ImGui::Dummy(ImVec2(w, h + 4));
+                            for (int s = 0; s < static_cast<int>(obj.penumbraStops.size()); s++) {
+                                ImGui::PushID(s);
+                                ImGui::ColorEdit3("##col", &obj.penumbraStops[s].color.x, ImGuiColorEditFlags_NoInputs);
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(120);
+                                ImGui::SliderFloat("##pos", &obj.penumbraStops[s].position, 0.0f, 1.0f, "%.2f");
+                                if (obj.penumbraStops.size() > 2) {
+                                    ImGui::SameLine();
+                                    if (ImGui::SmallButton("x")) {
+                                        obj.penumbraStops.erase(obj.penumbraStops.begin() + s);
+                                        ImGui::PopID();
+                                        break;
+                                    }
+                                }
+                                ImGui::PopID();
+                            }
+                            if (static_cast<int>(obj.penumbraStops.size()) < MAX_RAMP_STOPS && ImGui::Button("Add stop")) {
+                                obj.penumbraStops.push_back({ glm::vec3(1.0f), 0.5f });
+                            }
+                            ImGui::SliderFloat("Layer Weight", &obj.penumbraWeight, 0.0f, 1.0f);
+                            ImGui::SliderFloat("Ramp Bands", &obj.penumbraBands, 0.0f, 12.0f, "%.0f");
+                            ImGui::Combo("Pattern", &obj.penumbraPattern, "None\0Noise\0Hatch\0Halftone\0");
+                            ImGui::SliderFloat("Pattern Scale", &obj.penumbraPatternScale, 1.0f, 200.0f);
+                            ImGui::SliderFloat("Pattern Strength", &obj.penumbraPatternStrength, 0.0f, 0.5f);
                         }
-                        if (static_cast<int>(obj.penumbraStops.size()) < MAX_RAMP_STOPS && ImGui::Button("Add stop")) {
-                            obj.penumbraStops.push_back({ glm::vec3(1.0f), 0.5f });
-                        }
-                        ImGui::SliderFloat("Layer Weight", &obj.penumbraWeight, 0.0f, 1.0f);
-                        ImGui::SliderFloat("Ramp Bands", &obj.penumbraBands, 0.0f, 12.0f, "%.0f");
-                        ImGui::Combo("Pattern", &obj.penumbraPattern, "None\0Noise\0Hatch\0Halftone\0");
-                        ImGui::SliderFloat("Pattern Scale", &obj.penumbraPatternScale, 1.0f, 200.0f);
-                        ImGui::SliderFloat("Pattern Strength", &obj.penumbraPatternStrength, 0.0f, 0.5f);
                     }
                     else if (g_selectionType == SelectionType::Light && g_selectedIndex >= 0 && g_selectedIndex < static_cast<int>(g_sceneLights.size())) {
                         SceneLight& light = g_sceneLights[g_selectedIndex];
@@ -1428,32 +1473,6 @@ int main() {
                 }
                 ImGui::End();
 
-                //Window 3: Scene Outliner
-                ImGui::SetNextWindowPos(ImVec2(1580, 20), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSizeConstraints(ImVec2(300, 0), ImVec2(FLT_MAX, FLT_MAX));
-                ImGui::Begin("Scene Outliner", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
-                {
-                    ImGui::Text("Scene Objects:");
-                    for (int i = 0; i < static_cast<int>(g_sceneObjects.size()); i++) {
-                        bool isSelected = (g_selectionType == SelectionType::Object && g_selectedIndex == i);
-                        if (ImGui::Selectable(g_sceneObjects[i].name.c_str(), isSelected)) {
-                            g_selectionType = SelectionType::Object;
-                            g_selectedIndex = i;
-                        }
-                    }
-                    
-                    ImGui::Separator();
-                    ImGui::Text("Scene Lights:");
-                    for (int i = 0; i < static_cast<int>(g_sceneLights.size()); i++) {
-                        bool isSelected = (g_selectionType == SelectionType::Light && g_selectedIndex == i);
-                        if (ImGui::Selectable(g_sceneLights[i].name.c_str(), isSelected)) {
-                            g_selectionType = SelectionType::Light;
-                            g_selectedIndex = i;
-                        }
-                    }
-                }
-
-                ImGui::End();
                 imguiManager.EndFrame();
             }
 

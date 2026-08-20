@@ -25,7 +25,8 @@ public:
         glm::mat4 invView;
         glm::vec4 cameraPos;
         float reflectivity;
-        float _p0, _p1, _p2;
+        float aoStrength;
+        float _p1, _p2;
     };
 
     void Init(VulkanContext& context, VkFormat ssrFormat, VkFormat hdrFormat,

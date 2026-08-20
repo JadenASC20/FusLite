@@ -31,6 +31,14 @@ void main()
                     (pc.farZ + pc.nearZ - d * (pc.farZ - pc.nearZ));
         outColor = vec4(vec3(lin / pc.farZ), 1.0);
     }
+    else if (pc.mode == 5) {                    // SSR: RGBA16F, show rgb (Reinhard to tame HDR)
+        vec3 c = texture(srcTex, inUV).rgb;
+        outColor = vec4(c / (c + vec3(1.0)), 1.0);
+    }
+    else if (pc.mode == 6) {                    // SSAO: R8 single channel -> grayscale
+        float ao = texture(srcTex, inUV).r;
+        outColor = vec4(vec3(ao), 1.0);
+    }
     else {
         outColor = vec4(0.0, 0.0, 0.0, 1.0);
     }
