@@ -108,7 +108,7 @@ const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal
 #if SCENE_HERO_MCLAREN
 
 const std::vector<std::string> modelPaths = {
-    "assets/McLarenShowcaseDemo/McLaren.glb",
+    "assets/McLarenShowcaseDemo/McLarenYellow.glb",
     "assets/McLarenShowcaseDemo/McLarenStage.glb"
 };
 const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenAutoshop.hdr";
@@ -1173,7 +1173,7 @@ int main() {
 
                     if (contains(n, "CarPaint") && !contains(n, "Trim")) {
                         mp.clearcoatFactor = 1.0f; mp.clearcoatRoughness = 0.04f;
-                        mp.flakeStrength = 0.10f; mp.flakeScale = 0.0f;
+                        mp.flakeStrength = 0.3f; mp.flakeScale = 2000.0f;
                     }
                     else if (contains(n, "Carbon")) {
                         mp.clearcoatFactor = 0.8f; mp.clearcoatRoughness = 0.08f;
