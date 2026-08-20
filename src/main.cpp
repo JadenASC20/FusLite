@@ -36,6 +36,7 @@
 #include <filesystem>
 #include <random>
 #include <SSAOPipeline.h>
+#include <GpuLabel.h>
 
 #define GLFW_INCLUDE_NONE
 #define SCENE_HERO_MCLAREN 1   // 0 = shaderballs scene, 1 = McLaren scene
@@ -195,26 +196,26 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     const Skybox& skybox, const std::vector<Model>& showcaseSpheres,
     const std::vector<SceneObject>& sceneObjects,
     ImGuiManager& imguiManager, bool showGui, RenderParams params, int tonemapMode, float exposure,
-    int frameInFlight, 
+    int frameInFlight,
     DebugViewPipeline& debugPipeline, int debugMode,
     const SSRPipeline& ssrPipeline, const Camera& camera,
-    bool ssrEnabled, float ssrReflectivity, int ssrMaxSteps, float ssrStepSize, float ssrThickness, 
+    bool ssrEnabled, float ssrReflectivity, int ssrMaxSteps, float ssrStepSize, float ssrThickness,
     const HiZPipeline& hizPipeline, const SSAOPipeline& ssaoPipeline, float ssaoRadius, float ssaoBias, float ssaoPower)
 {
 
     VkExtent2D extent = swapchain.GetExtent();
     VkImage colorImage = swapchain.GetImages()[imageIndex];
     VkImageView colorView = swapchain.GetImageViews()[imageIndex];
-    
+
     VkImageView depthView = renderResources.GetDepthImageViews()[imageIndex];
     VkImage depthImage = renderResources.GetDepthImages()[imageIndex];
-    
+
     VkImage hdrImage = renderResources.GetHdrImages()[imageIndex];
     VkImageView hdrView = renderResources.GetHdrImageViews()[imageIndex];
-    
+
     VkImage motionImage = renderResources.GetMotionImages()[imageIndex];
     VkImageView motionView = renderResources.GetMotionImageViews()[imageIndex];
-    
+
     VkImage normalImage = renderResources.GetNormalImages()[imageIndex];
     VkImageView normalView = renderResources.GetNormalImageViews()[imageIndex];
 
@@ -235,12 +236,12 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
 
     VkImageView debugView = VK_NULL_HANDLE;
     switch (debugMode) {
-        case 1: debugView = hdrView; break;                                        // already SHADER_READ after resolve
-        case 2: debugView = renderResources.GetMotionImageViews()[imageIndex]; break;
-        case 3: debugView = normalView; break;
-        case 4: debugView = depthView; break;   // needs the depth->read barrier
-        case 5: debugView = ssrView; break;
-        case 6: debugView = ssaoView; break;
+    case 1: debugView = hdrView; break;                                        // already SHADER_READ after resolve
+    case 2: debugView = renderResources.GetMotionImageViews()[imageIndex]; break;
+    case 3: debugView = normalView; break;
+    case 4: debugView = depthView; break;   // needs the depth->read barrier
+    case 5: debugView = ssrView; break;
+    case 6: debugView = ssaoView; break;
     }
 
     VkCommandBufferBeginInfo beginInfo{};
@@ -248,148 +249,154 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     vkBeginCommandBuffer(cmd, &beginInfo);
 
     // Pass 0: Shadow map (depth-only, from the light's POV)
-    TransitionImage(cmd, shadowMap.GetImage(),
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_DEPTH_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+    {
+        GpuLabel _lbl(cmd, "Shadow Pass", 0.5f, 0.4f, 0.2f);
+        TransitionImage(cmd, shadowMap.GetImage(),
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-    VkRenderingAttachmentInfo shadowDepthAttachment{};
-    shadowDepthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    shadowDepthAttachment.imageView = shadowMap.GetImageView();
-    shadowDepthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    shadowDepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    shadowDepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    shadowDepthAttachment.clearValue.depthStencil = { 1.0f, 0 };
+        VkRenderingAttachmentInfo shadowDepthAttachment{};
+        shadowDepthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        shadowDepthAttachment.imageView = shadowMap.GetImageView();
+        shadowDepthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        shadowDepthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        shadowDepthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        shadowDepthAttachment.clearValue.depthStencil = { 1.0f, 0 };
 
-    VkRenderingInfo shadowRenderingInfo{};
-    shadowRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    shadowRenderingInfo.renderArea = { {0, 0}, { shadowMap.GetResolution(), shadowMap.GetResolution() } };
-    shadowRenderingInfo.layerCount = 1;
-    shadowRenderingInfo.colorAttachmentCount = 0;
-    shadowRenderingInfo.pDepthAttachment = &shadowDepthAttachment;
-    vkCmdBeginRendering(cmd, &shadowRenderingInfo);
-    shadowPipeline.Bind(cmd);
-    for (size_t i = 0; i < showcaseSpheres.size(); i++) {
-        ShadowPushConstants spc{};
-        spc.lightViewProj = lightViewProj;
-        spc.model = sceneObjects[i].transform;
-        shadowPipeline.PushConstants(cmd, spc);
-        showcaseSpheres[i].DrawGeometryOnly(cmd);
+        VkRenderingInfo shadowRenderingInfo{};
+        shadowRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        shadowRenderingInfo.renderArea = { {0, 0}, { shadowMap.GetResolution(), shadowMap.GetResolution() } };
+        shadowRenderingInfo.layerCount = 1;
+        shadowRenderingInfo.colorAttachmentCount = 0;
+        shadowRenderingInfo.pDepthAttachment = &shadowDepthAttachment;
+        vkCmdBeginRendering(cmd, &shadowRenderingInfo);
+        shadowPipeline.Bind(cmd);
+        for (size_t i = 0; i < showcaseSpheres.size(); i++) {
+            ShadowPushConstants spc{};
+            spc.lightViewProj = lightViewProj;
+            spc.model = sceneObjects[i].transform;
+            shadowPipeline.PushConstants(cmd, spc);
+            showcaseSpheres[i].DrawGeometryOnly(cmd);
+        }
+
+        vkCmdEndRendering(cmd);
+
+        // Transition shadow map for shader reading in the main pass
+        TransitionImage(cmd, shadowMap.GetImage(),
+            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
     }
-
-    vkCmdEndRendering(cmd);
-
-    // Transition shadow map for shader reading in the main pass
-    TransitionImage(cmd, shadowMap.GetImage(),
-        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_DEPTH_BIT,
-        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
     // Pass 1: render scene + skybox into the HDR offscreen target
-    TransitionImage(cmd, hdrImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    {
+        GpuLabel _lbl(cmd, "Scene G-Buffer", 0.3f, 0.7f, 0.3f);
+        TransitionImage(cmd, hdrImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
-    TransitionImage(cmd, motionImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        TransitionImage(cmd, motionImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
-    TransitionImage(cmd, normalImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        TransitionImage(cmd, normalImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
-    TransitionImage(cmd, depthImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_DEPTH_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-        0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
+        TransitionImage(cmd, depthImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            0, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT);
 
-    TransitionImage(cmd, materialImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        TransitionImage(cmd, materialImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
-    VkRenderingAttachmentInfo hdrColorAttachment{};
-    hdrColorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    hdrColorAttachment.imageView = hdrView;
-    hdrColorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    hdrColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    hdrColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    hdrColorAttachment.clearValue.color = { 0.1f, 0.1f, 0.2f, 1.0f };
+        VkRenderingAttachmentInfo hdrColorAttachment{};
+        hdrColorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        hdrColorAttachment.imageView = hdrView;
+        hdrColorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        hdrColorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        hdrColorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        hdrColorAttachment.clearValue.color = { 0.1f, 0.1f, 0.2f, 1.0f };
 
-    VkRenderingAttachmentInfo depthAttachment{};
-    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachment.imageView = depthView;
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    depthAttachment.clearValue.depthStencil = { 1.0f, 0 };
+        VkRenderingAttachmentInfo depthAttachment{};
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = depthView;
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        depthAttachment.clearValue.depthStencil = { 1.0f, 0 };
 
-    VkRenderingAttachmentInfo motionAttachment{};
-    motionAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    motionAttachment.imageView = renderResources.GetMotionImageViews()[imageIndex];
-    motionAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    motionAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    motionAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    motionAttachment.clearValue.color = { 0.0f, 0.0f, 0.0f, 0.0f };
+        VkRenderingAttachmentInfo motionAttachment{};
+        motionAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        motionAttachment.imageView = renderResources.GetMotionImageViews()[imageIndex];
+        motionAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        motionAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        motionAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        motionAttachment.clearValue.color = { 0.0f, 0.0f, 0.0f, 0.0f };
 
-    VkRenderingAttachmentInfo normalAttachment{};
-    normalAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    normalAttachment.imageView = normalView;
-    normalAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    normalAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    normalAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    normalAttachment.clearValue.color = { 0.5f, 0.5f, 1.0f, 1.0f };  // encodes N=(0,0,1)
+        VkRenderingAttachmentInfo normalAttachment{};
+        normalAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        normalAttachment.imageView = normalView;
+        normalAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        normalAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        normalAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        normalAttachment.clearValue.color = { 0.5f, 0.5f, 1.0f, 1.0f };  // encodes N=(0,0,1)
 
-    VkRenderingAttachmentInfo materialAttachment{};
-    materialAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    materialAttachment.imageView = materialView;
-    materialAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    materialAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    materialAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    materialAttachment.clearValue.color = { 0.5f, 0.0f, 0.0f, 0.0f };  // roughness 0.5, metallic 0 default
+        VkRenderingAttachmentInfo materialAttachment{};
+        materialAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        materialAttachment.imageView = materialView;
+        materialAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        materialAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        materialAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        materialAttachment.clearValue.color = { 0.5f, 0.0f, 0.0f, 0.0f };  // roughness 0.5, metallic 0 default
 
-    VkRenderingAttachmentInfo sceneAttachments[4] = { hdrColorAttachment, motionAttachment, normalAttachment, materialAttachment };
-    VkRenderingInfo sceneRenderingInfo{};
-    sceneRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    sceneRenderingInfo.renderArea = { {0, 0}, extent };
-    sceneRenderingInfo.layerCount = 1;
-    sceneRenderingInfo.colorAttachmentCount = 4;
-    sceneRenderingInfo.pColorAttachments = sceneAttachments;
-    sceneRenderingInfo.pDepthAttachment = &depthAttachment;
-    vkCmdBeginRendering(cmd, &sceneRenderingInfo);
+        VkRenderingAttachmentInfo sceneAttachments[4] = { hdrColorAttachment, motionAttachment, normalAttachment, materialAttachment };
+        VkRenderingInfo sceneRenderingInfo{};
+        sceneRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        sceneRenderingInfo.renderArea = { {0, 0}, extent };
+        sceneRenderingInfo.layerCount = 1;
+        sceneRenderingInfo.colorAttachmentCount = 4;
+        sceneRenderingInfo.pColorAttachments = sceneAttachments;
+        sceneRenderingInfo.pDepthAttachment = &depthAttachment;
+        vkCmdBeginRendering(cmd, &sceneRenderingInfo);
 
-    skybox.Draw(cmd, imageIndex);
+        skybox.Draw(cmd, imageIndex);
 
-    // Opaque Pass
-    pipeline.Bind(cmd);
-    pipeline.PushParams(cmd, params);
-   
-    for (size_t i = 0; i < showcaseSpheres.size(); i++) {
-        showcaseSpheres[i].DrawOpaque(cmd, pipeline.GetLayout(), imageIndex, params, sceneObjects[i].materials);
+        // Opaque Pass
+        pipeline.Bind(cmd);
+        pipeline.PushParams(cmd, params);
+
+        for (size_t i = 0; i < showcaseSpheres.size(); i++) {
+            showcaseSpheres[i].DrawOpaque(cmd, pipeline.GetLayout(), imageIndex, params, sceneObjects[i].materials);
+        }
+
+        // Transparent pass
+        pipeline.BindTransparent(cmd);
+        pipeline.PushParams(cmd, params);
+        for (size_t i = 0; i < showcaseSpheres.size(); i++) {
+            showcaseSpheres[i].DrawTransparent(cmd, pipeline.GetLayout(), imageIndex, params, sceneObjects[i].materials);
+        }
+
+        vkCmdEndRendering(cmd);
     }
-
-    // Transparent pass
-    pipeline.BindTransparent(cmd);
-    pipeline.PushParams(cmd, params);
-    for (size_t i = 0; i < showcaseSpheres.size(); i++) {
-        showcaseSpheres[i].DrawTransparent(cmd, pipeline.GetLayout(), imageIndex, params, sceneObjects[i].materials);
-    }
-
-    vkCmdEndRendering(cmd);
 
     // SSR: scene outputs (HDR, depth, normal) -> shader read; march; write SSR target
     {
-        VkViewport vpD{ 0,0,(float)extent.width,(float)extent.height,0,1 };
+        VkViewport vpD{ 0, 0, (float)extent.width, (float)extent.height, 0, 1 };
         VkRect2D scD{ {0,0}, extent };
 
         // Inputs -> shader read
@@ -419,200 +426,216 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
             renderResources.GetHiZMipLevels(),
             0.1f, 1000.0f);
 
-        // --- SSAO pass (depth + normal already SHADER_READ from SSR setup) ---
-        TransitionImage(cmd, ssaoImage,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        // SSAO pass (depth + normal already SHADER_READ from SSR setup)
         {
-            VkRenderingAttachmentInfo aoAtt{};
-            aoAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-            aoAtt.imageView = ssaoView;
-            aoAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            aoAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-            aoAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-            VkRenderingInfo aoRI{};
-            aoRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-            aoRI.renderArea = { {0,0}, extent };
-            aoRI.layerCount = 1; aoRI.colorAttachmentCount = 1; aoRI.pColorAttachments = &aoAtt;
-            vkCmdBeginRendering(cmd, &aoRI);
-            vkCmdSetViewport(cmd, 0, 1, &vpD);
-            vkCmdSetScissor(cmd, 0, 1, &scD);
-            SSAOPipeline::SSAOPush ap{};
-            ap.proj = camera.GetProjectionMatrixNoJitter();
-            ap.invProj = glm::inverse(ap.proj);
-            ap.view = camera.GetViewMatrix();
-            ap.screenSize = glm::vec2((float)extent.width, (float)extent.height);
-            ap.radius = ssaoRadius; ap.bias = ssaoBias; ap.power = ssaoPower;
-            ssaoPipeline.Bind(cmd, imageIndex, ap);
-            vkCmdDraw(cmd, 3, 1, 0, 0);
-            vkCmdEndRendering(cmd);
+            GpuLabel _lbl(cmd, "SSAO", 0.8f, 0.6f, 0.2f);
+
+            TransitionImage(cmd, ssaoImage,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+            {
+                VkRenderingAttachmentInfo aoAtt{};
+                aoAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                aoAtt.imageView = ssaoView;
+                aoAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                aoAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+                aoAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                VkRenderingInfo aoRI{};
+                aoRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                aoRI.renderArea = { {0,0}, extent };
+                aoRI.layerCount = 1; aoRI.colorAttachmentCount = 1; aoRI.pColorAttachments = &aoAtt;
+                vkCmdBeginRendering(cmd, &aoRI);
+                vkCmdSetViewport(cmd, 0, 1, &vpD);
+                vkCmdSetScissor(cmd, 0, 1, &scD);
+                SSAOPipeline::SSAOPush ap{};
+                ap.proj = camera.GetProjectionMatrixNoJitter();
+                ap.invProj = glm::inverse(ap.proj);
+                ap.view = camera.GetViewMatrix();
+                ap.screenSize = glm::vec2((float)extent.width, (float)extent.height);
+                ap.radius = ssaoRadius; ap.bias = ssaoBias; ap.power = ssaoPower;
+                ssaoPipeline.Bind(cmd, imageIndex, ap);
+                vkCmdDraw(cmd, 3, 1, 0, 0);
+                vkCmdEndRendering(cmd);
+            }
+            // AO -> shader read (for debug view / later composite)
+            TransitionImage(cmd, ssaoImage,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         }
-        // AO -> shader read (for debug view / later composite)
-        TransitionImage(cmd, ssaoImage,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
         // SSR target -> color attachment
-        TransitionImage(cmd, ssrImage,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        {
+            GpuLabel _lbl(cmd, "SSR", 0.7f, 0.3f, 0.7f);
+            TransitionImage(cmd, ssrImage,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
-        VkRenderingAttachmentInfo ssrAtt{};
-        ssrAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        ssrAtt.imageView = ssrView;
-        ssrAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        ssrAtt.loadOp = ssrEnabled ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_CLEAR;
-        ssrAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        ssrAtt.clearValue.color = { 0.0f, 0.0f, 0.0f, 0.0f };
-        VkRenderingInfo ssrRI{};
-        ssrRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        ssrRI.renderArea = { {0,0}, extent };
-        ssrRI.layerCount = 1; 
-        ssrRI.colorAttachmentCount = 1; 
-        ssrRI.pColorAttachments = &ssrAtt;
+            VkRenderingAttachmentInfo ssrAtt{};
+            ssrAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            ssrAtt.imageView = ssrView;
+            ssrAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            ssrAtt.loadOp = ssrEnabled ? VK_ATTACHMENT_LOAD_OP_DONT_CARE : VK_ATTACHMENT_LOAD_OP_CLEAR;
+            ssrAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            ssrAtt.clearValue.color = { 0.0f, 0.0f, 0.0f, 0.0f };
+            VkRenderingInfo ssrRI{};
+            ssrRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            ssrRI.renderArea = { {0,0}, extent };
+            ssrRI.layerCount = 1;
+            ssrRI.colorAttachmentCount = 1;
+            ssrRI.pColorAttachments = &ssrAtt;
 
-        vkCmdBeginRendering(cmd, &ssrRI);
-        if (ssrEnabled) {
-            vkCmdSetViewport(cmd, 0, 1, &vpD);
-            vkCmdSetScissor(cmd, 0, 1, &scD);
-            SSRPipeline::SSRPush sp{};
-            glm::mat4 projNJ = camera.GetProjectionMatrixNoJitter();
-            glm::mat4 viewM = camera.GetViewMatrix();
-            sp.invProj = glm::inverse(projNJ);
-            sp.view = viewM; sp.proj = projNJ;
-            sp.screenSize = glm::vec2((float)extent.width, (float)extent.height);
-            sp.nearZ = 0.1f; sp.farZ = 1000.0f;
-            sp.maxSteps = ssrMaxSteps; 
-            sp.stepSize = ssrStepSize; 
-            sp.thickness = ssrThickness;
-            sp.hizMipCount = (int)renderResources.GetHiZMipLevels();
-            ssrPipeline.BindSSR(cmd, imageIndex, sp);
-            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdBeginRendering(cmd, &ssrRI);
+            if (ssrEnabled) {
+                vkCmdSetViewport(cmd, 0, 1, &vpD);
+                vkCmdSetScissor(cmd, 0, 1, &scD);
+                SSRPipeline::SSRPush sp{};
+                glm::mat4 projNJ = camera.GetProjectionMatrixNoJitter();
+                glm::mat4 viewM = camera.GetViewMatrix();
+                sp.invProj = glm::inverse(projNJ);
+                sp.view = viewM; sp.proj = projNJ;
+                sp.screenSize = glm::vec2((float)extent.width, (float)extent.height);
+                sp.nearZ = 0.1f; sp.farZ = 1000.0f;
+                sp.maxSteps = ssrMaxSteps;
+                sp.stepSize = ssrStepSize;
+                sp.thickness = ssrThickness;
+                sp.hizMipCount = (int)renderResources.GetHiZMipLevels();
+                ssrPipeline.BindSSR(cmd, imageIndex, sp);
+                vkCmdDraw(cmd, 3, 1, 0, 0);
+            }
+            vkCmdEndRendering(cmd);
+
+            // SSR target -> shader read
+            TransitionImage(cmd, ssrImage,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
         }
-        vkCmdEndRendering(cmd);
-
-        // SSR target -> shader read
-        TransitionImage(cmd, ssrImage,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
         // Composite: HDR(read) + SSR(read) -> composite target
-        TransitionImage(cmd, compositeImage,
-            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-        VkRenderingAttachmentInfo compAtt{};
-        compAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-        compAtt.imageView = compositeView;
-        compAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        compAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        compAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-        VkRenderingInfo compRI{};
-        compRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-        compRI.renderArea = { {0,0}, extent };
-        compRI.layerCount = 1; 
-        compRI.colorAttachmentCount = 1; 
-        compRI.pColorAttachments = &compAtt;
+        {
+            GpuLabel _lbl(cmd, "Composite", 0.3f, 0.5f, 0.9f);
 
-        vkCmdBeginRendering(cmd, &compRI);
-        vkCmdSetViewport(cmd, 0, 1, &vpD);
-        vkCmdSetScissor(cmd, 0, 1, &scD);
-        
-        SSRPipeline::CompPush cpc{};
-        cpc.invProj = glm::inverse(camera.GetProjectionMatrixNoJitter());
-        cpc.invView = glm::inverse(camera.GetViewMatrix());
-        cpc.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
-        cpc.reflectivity = ssrReflectivity;
-        cpc.aoStrength = g_ssaoEnabled ? 1.0f : 0.0f;
-        ssrPipeline.BindComposite(cmd, imageIndex, cpc);
+            TransitionImage(cmd, compositeImage,
+                VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+            VkRenderingAttachmentInfo compAtt{};
+            compAtt.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+            compAtt.imageView = compositeView;
+            compAtt.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+            compAtt.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+            compAtt.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+            VkRenderingInfo compRI{};
+            compRI.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+            compRI.renderArea = { {0,0}, extent };
+            compRI.layerCount = 1;
+            compRI.colorAttachmentCount = 1;
+            compRI.pColorAttachments = &compAtt;
 
-        vkCmdDraw(cmd, 3, 1, 0, 0);
-        vkCmdEndRendering(cmd);
+            vkCmdBeginRendering(cmd, &compRI);
+            vkCmdSetViewport(cmd, 0, 1, &vpD);
+            vkCmdSetScissor(cmd, 0, 1, &scD);
 
-        // Composite -> shader read (resolve reads it)
-        TransitionImage(cmd, compositeImage,
-            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            VK_IMAGE_ASPECT_COLOR_BIT,
-            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+            SSRPipeline::CompPush cpc{};
+            cpc.invProj = glm::inverse(camera.GetProjectionMatrixNoJitter());
+            cpc.invView = glm::inverse(camera.GetViewMatrix());
+            cpc.cameraPos = glm::vec4(camera.GetPosition(), 0.0f);
+            cpc.reflectivity = ssrReflectivity;
+            cpc.aoStrength = g_ssaoEnabled ? 1.0f : 0.0f;
+            ssrPipeline.BindComposite(cmd, imageIndex, cpc);
+
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+            vkCmdEndRendering(cmd);
+
+            // Composite -> shader read (resolve reads it)
+            TransitionImage(cmd, compositeImage,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+        }
     }
     // HDR is now SHADER_READ; normal/depth are SHADER_READ. Resolve reads COMPOSITE.
 
     // Reads current HDR + motion + history[histRead], writes history[histWrite],
     // then copies the resolved result back into hdrImage so the (unchanged)
     // tonemap pass keeps reading HDR.
-    // 
+
     // current HDR + motion: color attachment -> shader read (resolve samples them)
 
-    TransitionImage(cmd, motionImage,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
+    {
+        GpuLabel _lbl(cmd, "TAA Resolve", 0.6f, 0.6f, 0.3f);
 
-    // history[histWrite]: shader read (from last frame / init) -> color attachment
-    TransitionImage(cmd, historyWriteImage,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+        TransitionImage(cmd, motionImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT);
 
-    // history[histRead] is already SHADER_READ_ONLY (last frame left it there / init) -> no barrier.
-    VkRenderingAttachmentInfo resolveAttachment{};
-    resolveAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    resolveAttachment.imageView = historyWriteView;
-    resolveAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // overwrite every pixel
-    resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        // history[histWrite]: shader read (from last frame / init) -> color attachment
+        TransitionImage(cmd, historyWriteImage,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
-    VkRenderingInfo resolveRenderingInfo{};
-    resolveRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    resolveRenderingInfo.renderArea = { {0, 0}, extent };
-    resolveRenderingInfo.layerCount = 1;
-    resolveRenderingInfo.colorAttachmentCount = 1;
-    resolveRenderingInfo.pColorAttachments = &resolveAttachment;
-    vkCmdBeginRendering(cmd, &resolveRenderingInfo);
+        // history[histRead] is already SHADER_READ_ONLY (last frame left it there / init) -> no barrier.
+        VkRenderingAttachmentInfo resolveAttachment{};
+        resolveAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        resolveAttachment.imageView = historyWriteView;
+        resolveAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // overwrite every pixel
+        resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 
-    ResolvePipeline::PushConstants rpc{};
-    rpc.texelSize[0] = 1.0f / float(extent.width);
-    rpc.texelSize[1] = 1.0f / float(extent.height);
-    rpc.blendAlpha = (g_taaResolveEnabled ? g_taaBlendAlpha : 1.0f);
-    rpc.firstFrame = firstFrame ? 1 : 0;
-    resolvePipeline.Bind(cmd, imageIndex, histRead, rpc);
-    vkCmdDraw(cmd, 3, 1, 0, 0);
-    vkCmdEndRendering(cmd);
+        VkRenderingInfo resolveRenderingInfo{};
+        resolveRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        resolveRenderingInfo.renderArea = { {0, 0}, extent };
+        resolveRenderingInfo.layerCount = 1;
+        resolveRenderingInfo.colorAttachmentCount = 1;
+        resolveRenderingInfo.pColorAttachments = &resolveAttachment;
+        vkCmdBeginRendering(cmd, &resolveRenderingInfo);
 
-    // Copy resolved (history[histWrite]) back into HDR so tonemap reads it unchanged.
-    TransitionImage(cmd, historyWriteImage,
-        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        ResolvePipeline::PushConstants rpc{};
+        rpc.texelSize[0] = 1.0f / float(extent.width);
+        rpc.texelSize[1] = 1.0f / float(extent.height);
+        rpc.blendAlpha = (g_taaResolveEnabled ? g_taaBlendAlpha : 1.0f);
+        rpc.firstFrame = firstFrame ? 1 : 0;
+        resolvePipeline.Bind(cmd, imageIndex, histRead, rpc);
+        vkCmdDraw(cmd, 3, 1, 0, 0);
+        vkCmdEndRendering(cmd);
 
-    TransitionImage(cmd, hdrImage,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        // Copy resolved (history[histWrite]) back into HDR so tonemap reads it unchanged.
+        TransitionImage(cmd, historyWriteImage,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
 
-    VkImageCopy copy{};
-    copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    copy.extent = { extent.width, extent.height, 1 };
+        TransitionImage(cmd, hdrImage,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    
 
-    vkCmdCopyImage(cmd,
-        historyWriteImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        hdrImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1, &copy);
+        VkImageCopy copy{};
+        copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        copy.extent = { extent.width, extent.height, 1 };
+
+        vkCmdCopyImage(cmd,
+            historyWriteImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            hdrImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &copy);
+    }
 
     // history[histWrite]: transfer src -> shader read (becomes NEXT frame's histRead)
     TransitionImage(cmd, historyWriteImage,
@@ -630,50 +653,54 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
 
     // Auto-exposure: blit resolved HDR down to 1x1, then to staging (blocking readback)
     // hdrImage is currently SHADER_READ_ONLY (resolve left it there). Take it to TRANSFER_SRC.
-    TransitionImage(cmd, hdrImage,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+    {
+        GpuLabel _lbl(cmd, "Auto-Exposure", 0.4f, 0.4f, 0.4f);
 
-    VkImage lumImage = renderResources.GetLumImage();
-    TransitionImage(cmd, lumImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, VK_ACCESS_TRANSFER_WRITE_BIT);
+        TransitionImage(cmd, hdrImage,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT);
 
-    VkImageBlit blit{};
-    blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    blit.srcOffsets[0] = { 0, 0, 0 };
-    blit.srcOffsets[1] = { (int32_t)extent.width, (int32_t)extent.height, 1 };
-    blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    blit.dstOffsets[0] = { 0, 0, 0 };
-    blit.dstOffsets[1] = { 1, 1, 1 };
-    vkCmdBlitImage(cmd,
-        hdrImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        lumImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1, &blit, VK_FILTER_LINEAR);
+        VkImage lumImage = renderResources.GetLumImage();
+        TransitionImage(cmd, lumImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, VK_ACCESS_TRANSFER_WRITE_BIT);
 
-    // lum 1x1 -> staging buffer
-    TransitionImage(cmd, lumImage,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+        VkImageBlit blit{};
+        blit.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        blit.srcOffsets[0] = { 0, 0, 0 };
+        blit.srcOffsets[1] = { (int32_t)extent.width, (int32_t)extent.height, 1 };
+        blit.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        blit.dstOffsets[0] = { 0, 0, 0 };
+        blit.dstOffsets[1] = { 1, 1, 1 };
+        vkCmdBlitImage(cmd,
+            hdrImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            lumImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &blit, VK_FILTER_LINEAR);
 
-    VkBufferImageCopy toBuf{};
-    toBuf.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-    toBuf.imageExtent = { 1, 1, 1 };
-    vkCmdCopyImageToBuffer(cmd, lumImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        renderResources.GetLumStagingBuffer(frameInFlight), 1, &toBuf);
+        // lum 1x1 -> staging buffer
+        TransitionImage(cmd, lumImage,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
 
-    // Restore hdrImage to SHADER_READ_ONLY so the tonemap pass reads it unchanged.
-    TransitionImage(cmd, hdrImage,
-        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
+        VkBufferImageCopy toBuf{};
+        toBuf.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+        toBuf.imageExtent = { 1, 1, 1 };
+        vkCmdCopyImageToBuffer(cmd, lumImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            renderResources.GetLumStagingBuffer(frameInFlight), 1, &toBuf);
+
+        // Restore hdrImage to SHADER_READ_ONLY so the tonemap pass reads it unchanged.
+        TransitionImage(cmd, hdrImage,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT);
+    }
 
     if (debugMode == 3) {
         TransitionImage(cmd, normalImage,
@@ -692,48 +719,54 @@ void RecordFrame(VkCommandBuffer cmd, uint32_t imageIndex, const Swapchain& swap
     }
 
     // Pass 2: tonemap HDR -> swapchain
-    TransitionImage(cmd, colorImage,
-        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        VK_IMAGE_ASPECT_COLOR_BIT,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+    {
+        GpuLabel _lbl(cmd, "Tonemap", 0.9f, 0.5f, 0.3f);
 
-    VkRenderingAttachmentInfo swapchainAttachment{};
-    swapchainAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    swapchainAttachment.imageView = colorView;
-    swapchainAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    swapchainAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    swapchainAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        TransitionImage(cmd, colorImage,
+            VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
 
-    VkRenderingInfo tonemapRenderingInfo{};
-    tonemapRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    tonemapRenderingInfo.renderArea = { {0, 0}, extent };
-    tonemapRenderingInfo.layerCount = 1;
-    tonemapRenderingInfo.colorAttachmentCount = 1;
-    tonemapRenderingInfo.pColorAttachments = &swapchainAttachment;
-    
-    vkCmdBeginRendering(cmd, &tonemapRenderingInfo);
-    if (debugMode == 0) {
-        tonemapPipeline.Bind(cmd, imageIndex, tonemapMode, exposure);
-        vkCmdDraw(cmd, 3, 1, 0, 0);
+        VkRenderingAttachmentInfo swapchainAttachment{};
+        swapchainAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        swapchainAttachment.imageView = colorView;
+        swapchainAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        swapchainAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        swapchainAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+        VkRenderingInfo tonemapRenderingInfo{};
+        tonemapRenderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        tonemapRenderingInfo.renderArea = { {0, 0}, extent };
+        tonemapRenderingInfo.layerCount = 1;
+        tonemapRenderingInfo.colorAttachmentCount = 1;
+        tonemapRenderingInfo.pColorAttachments = &swapchainAttachment;
+
+        vkCmdBeginRendering(cmd, &tonemapRenderingInfo);
+        if (debugMode == 0) {
+            tonemapPipeline.Bind(cmd, imageIndex, tonemapMode, exposure);
+            vkCmdDraw(cmd, 3, 1, 0, 0);
+        }
+        else {
+            // Debug pass replaces tonemap. Dynamic viewport/scissor (pipeline declares them dynamic).
+            VkViewport vpDyn{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
+            VkRect2D scDyn{ {0,0}, extent };
+            vkCmdSetViewport(cmd, 0, 1, &vpDyn);
+            vkCmdSetScissor(cmd, 0, 1, &scDyn);
+            DebugViewPipeline::PushConstants dpc{};
+            dpc.mode = debugMode;
+            dpc.nearZ = 0.1f;   // matches your camera near/far
+            dpc.farZ = 1000.0f;
+            debugPipeline.Bind(cmd, debugView, dpc);
+        }
+        vkCmdEndRendering(cmd);
     }
-    else {
-        // Debug pass replaces tonemap. Dynamic viewport/scissor (pipeline declares them dynamic).
-        VkViewport vpDyn{ 0.0f, 0.0f, (float)extent.width, (float)extent.height, 0.0f, 1.0f };
-        VkRect2D scDyn{ {0,0}, extent };
-        vkCmdSetViewport(cmd, 0, 1, &vpDyn);
-        vkCmdSetScissor(cmd, 0, 1, &scDyn);
-        DebugViewPipeline::PushConstants dpc{};
-        dpc.mode = debugMode;
-        dpc.nearZ = 0.1f;   // matches your camera near/far
-        dpc.farZ = 1000.0f;
-        debugPipeline.Bind(cmd, debugView, dpc);
-    }
-    vkCmdEndRendering(cmd);
 
     // Pass 3: ImGui overlay, drawn directly onto the swapchain image
 
     if (showGui) {
+        GpuLabel _lbl(cmd, "ImGui", 0.7f, 0.7f, 0.7f);
+
         VkRenderingAttachmentInfo imguiAttachment{};
         imguiAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
         imguiAttachment.imageView = colorView;

@@ -1,6 +1,11 @@
 #include "ShadowPipeline.h"
 #include "VulkanContext.h"
 #include "Vertex.h"
+#include "GpuLabel.h"
+#include <stdexcept>
+#include <cstdio>
+#include <algorithm>
+
 
 #include <stdexcept>
 #include <cstdio>
