@@ -4,7 +4,7 @@ A physically based real-time renderer built from scratch in **Vulkan 1.3**, with
 
 Developed and tested on an **NVIDIA RTX 2070 SUPER**.
 
-<img width="1920" height="1120" alt="image" src="https://github.com/user-attachments/assets/bf38b609-68e0-43c1-966b-c9612659a558" />
+<img width="946" height="533" alt="fsl_2" src="https://github.com/user-attachments/assets/7166a613-a1e9-409d-bbcd-146b6e62fcd8" />
 
 
 ---
