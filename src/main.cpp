@@ -108,7 +108,7 @@ const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal
 #if SCENE_HERO_MCLAREN
 
 const std::vector<std::string> modelPaths = {
-    "assets/McLarenShowcaseDemo/McLarenYellow.glb",
+    "assets/McLarenShowcaseDemo/McLaren.glb",
     "assets/McLarenShowcaseDemo/McLarenStage.glb"
 };
 const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenAutoshop.hdr";
