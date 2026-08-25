@@ -7,7 +7,7 @@
 
 ## What is it?
 
-FusLite is a physically based real-time renderer built from scratch in **Vulkan 1.3**, with no engine or rendering framework underneath. It implements a modern Forward+ pipeline as a study in low-level GPU architecture and real-time rendering technique. Developed and profiled on an **NVIDIA RTX 2070 SUPER**.
+FusLite is a physically based real-time renderer built from scratch in **Vulkan 1.3**. It implements a modern Forward+ pipeline as a study in low-level GPU architecture and real-time rendering technique. Developed and profiled on an **NVIDIA RTX 2070 SUPER**.
 
 <img width="946" height="533" alt="FusLite hero render" src="https://github.com/user-attachments/assets/d0628ef4-7f10-4500-a8c9-583695c45f84" />
 
@@ -60,7 +60,7 @@ Run the resulting executable from the build directory. Shaders are compiled to S
 | API | Vulkan 1.3 (dynamic rendering) |
 | Loader / allocation | volk, Vulkan Memory Allocator (VMA) |
 | Math | GLM |
-| Asset import | cgltf (hand-written glTF 2.0 loader) |
+| Asset import | cgltf |
 | Windowing | GLFW |
 | UI | Dear ImGui (v1.91.9, pinned) + ImGuizmo |
 | Build | CMake, Ninja, Visual Studio 2022 |
@@ -69,9 +69,9 @@ Run the resulting executable from the build directory. Shaders are compiled to S
 
 ## Media
 
-<img width="959" height="566" alt="fs3" src="https://github.com/user-attachments/assets/00fe3cd4-dc39-4529-b9ef-5c3234c918e5" />
-<img width="957" height="563" alt="fs4" src="https://github.com/user-attachments/assets/a8d7a990-fe89-4ff2-935d-ad6348117f23" />
-<img width="957" height="620" alt="fs5" src="https://github.com/user-attachments/assets/cdce260b-bbfb-48be-be2c-b2dbc907c9e2" />
+<img width="1512" height="845" alt="Screenshot 2026-08-25 at 12 12 37 AM" src="https://github.com/user-attachments/assets/9f48c039-aca1-4d9f-b8b2-8c77dde8c559" />
+<img width="1512" height="846" alt="Screenshot 2026-08-25 at 12 13 47 AM" src="https://github.com/user-attachments/assets/b60386be-3625-4e30-a5ac-8c62a804fd23" />
+<img width="1512" height="970" alt="fs5" src="https://github.com/user-attachments/assets/f5b37985-16d8-4919-be84-27b0b7e4ddca" />
 
 
 ## References
