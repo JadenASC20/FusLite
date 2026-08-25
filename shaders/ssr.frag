@@ -46,6 +46,12 @@ vec2 ProjectToUV(vec3 viewPos, out bool ok) {
     return ndc.xy * 0.5 + 0.5;
 }
 
+float EdgeFade(vec2 uv) {
+    // 0 at the very edge, 1 well inside; fade band ~10% of screen
+    vec2 f = smoothstep(vec2(0.0), vec2(0.1), uv) * (1.0 - smoothstep(vec2(0.9), vec2(1.0), uv));
+    return f.x * f.y;
+}
+
 void main()
 {
     float depth = texture(depthTex, inUV).r;
@@ -58,7 +64,8 @@ void main()
     vec3 reflDir = reflect(viewDir, viewN);
 
     float roughness = texture(materialTex, inUV).r;
-    if (roughness > 0.4) { outSSR = vec4(0.0); return; }   // tune threshold
+    float roughFade = 1.0 - smoothstep(0.25, 0.45, roughness);   // 1 below 0.25, ramps to 0 by 0.45
+    if (roughFade <= 0.0) { outSSR = vec4(0.0); return; }         // fully rough: skip the march entirely
 
     // March the reflection ray. We advance in view space but use the Hi-Z pyramid
     // to skip empty space: at each step, read the min/max linear depth of the current
@@ -66,7 +73,7 @@ void main()
     // that cell (its linear depth is nearer than the cell's min), skip ahead and climb
     // a mip. If it might intersect (overlaps the cell's depth range), descend for detail.
     
-    vec3 rayPos = viewPos + reflDir * 0.05;   // small bias off the surface
+    vec3 rayPos = viewPos + reflDir * (0.05 + viewPos.z * -0.01);  // bias grows with depth    
     int level = 0;                            // start fine, climb as we skip empty space
     
     int maxLevel = min(pc.hizMipCount - 1, 6);
@@ -80,6 +87,8 @@ void main()
 
         // Ray's linear depth at this point (view z is negative, linear eye distance = -z).
         float rayLinZ = -rayPos.z;
+        float thick = pc.thickness * (1.0 + rayLinZ * 0.05);   // grows with distance; tune the 0.05
+
 
         // Read the Hi-Z cell at this mip: R=min, G=max linear depth in the cell's footprint
         vec2 cell = textureLod(hizTex, uv, float(level)).rg;
@@ -89,8 +98,29 @@ void main()
         // Does the ray's depth fall within (or past) the cell's occupied depth range?
         // If the ray is still NEARER than everything in the cell (rayLinZ < cellMin - thickness),
         // the cell is empty in front of the ray: skip ahead, climb a mip to skip faster.
-        if (rayLinZ < cellMin - pc.thickness) {
-            rayPos += reflDir * pc.stepSize *  (2.0 + float(level) * float(level) * 0.5);  // big skips at coarse mips
+        if (rayLinZ < cellMin - thick || rayLinZ > cellMax + thick) {
+            // Cell count at this mip
+            vec2 mipSize = pc.screenSize / exp2(float(level));
+
+            // Current UV and a UV a tiny bit further along the ray (to get UV-space direction)
+            bool ok0, ok1;
+            vec2 uv0 = ProjectToUV(rayPos, ok0);
+            vec2 uv1 = ProjectToUV(rayPos + reflDir * 0.01, ok1);
+            vec2 uvDir = uv1 - uv0;                        // ray direction in UV space (unnormalized)
+
+            // Which cell are we in, and where are its far edges (in the direction of travel)?
+            vec2 cellUV = uv0 * mipSize;                   // position in cell units
+            vec2 cellEdge = floor(cellUV) + step(0.0, uvDir);   // next edge in each axis (0 or 1 side)
+            vec2 edgeUV = cellEdge / mipSize;              // UV of the next cell boundary per axis
+
+            // Parametric distance to each axis boundary: how far along uvDir to reach edgeUV
+            vec2 tEdge = (edgeUV - uv0) / (uvDir + vec2(1e-6));   // avoid div0
+            float tCell = min(tEdge.x, tEdge.y);           // nearest boundary
+            tCell = max(tCell, 0.0);
+
+            // Step the ray that far in view space, plus a small epsilon to cross into the next cell.
+            // tCell is in units of the 0.01 view-space probe, so scale back:
+            rayPos += reflDir * (tCell * 0.01 + 1e-4);
             level = min(level + 1, maxLevel);
             continue;
         }
@@ -103,14 +133,24 @@ void main()
             if (sceneDepth < 1.0) {
                 float sceneLinZ = LinearizeDepth(sceneDepth);
                 float delta = rayLinZ - sceneLinZ;
-                if (delta > 0.0 && delta < pc.thickness) {
-                    hitColor = vec4(texture(hdrTex, uv).rgb, 1.0);
+                if (delta > 0.0 && delta < thick) {
+                    float edge = EdgeFade(uv);
+                    hitColor = vec4(texture(hdrTex, uv).rgb, edge * roughFade);   // alpha = fade, not just 1.0
                     break;
                 }
             }
 
             // No hit at mip0: nudge forward a small step and keep going.
-            rayPos += reflDir * pc.stepSize;
+            vec2 mipSize = pc.screenSize;
+            bool okp;
+            vec2 uv1 = ProjectToUV(rayPos + reflDir * 0.01, okp);
+            vec2 uvDir = uv1 - uv;
+            vec2 cellUV = uv * mipSize;
+            vec2 cellEdge = floor(cellUV) + step(0.0, uvDir);
+            vec2 edgeUV = cellEdge / mipSize;
+            vec2 tEdge = (edgeUV - uv) / (uvDir + vec2(1e-6));
+            float tCell = max(min(tEdge.x, tEdge.y), 0.0);
+            rayPos += reflDir * (tCell * 0.01 + 1e-4);
 
         } else {
 
