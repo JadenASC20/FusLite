@@ -30,12 +30,13 @@ void main()
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
     if (p.x >= pc.dstSize.x || p.y >= pc.dstSize.y) return;
 
-    if (pc.mode == 0) {
-        // Sample the scene depth at this destination texel's center.
+   if (pc.mode == 0) {
         vec2 uv = (vec2(p) + 0.5) / vec2(pc.dstSize);
         float d = texture(srcTex, uv).r;
-        float lin = (d >= 1.0) ? pc.farZ : LinearizeDepth(d);  // far/sky clamps to farZ
-        imageStore(dstMip, p, vec4(lin, lin, 0.0, 0.0));       // min == max at mip 0
+        // Store NONLINEAR depth directly (matches the ray's nonlinear rayZ in screen-space DDA).
+        // Sky (d>=1) stays 1.0 — the farthest possible, so nothing is "behind" it.
+        imageStore(dstMip, p, vec4(d, d, 0.0, 0.0));   // min == max at mip 0
+    
     } else {
         // Gather the 2x2 block from the previous mip (which is 2x the size).
         // Use texelFetch on the previous mip via textureLod on srcTex.

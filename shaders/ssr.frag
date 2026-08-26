@@ -1,163 +1,130 @@
 #version 450
 
-// Linear mirror SSR. Reconstruct view-space position from depth, reflect the
-// view ray about the view-space normal, march the reflection ray in view space,
-// project each step to screen UV, compare against sampled depth. On hit, sample HDR.
+// Inspired from Uludag / Sakib Saikia SSR Setup.
 
-layout(binding = 0) uniform sampler2D hdrTex;     // lit scene (what we reflect)
-layout(binding = 1) uniform sampler2D depthTex;   // scene depth (nonlinear [0,1])
-layout(binding = 2) uniform sampler2D normalTex;  // world-space geometric normal, [0,1]-encoded
-layout(binding = 3) uniform sampler2D hizTex;     // Hi-Z pyramid: R=min linear depth, G=max linear depth
-layout(binding = 4) uniform sampler2D materialTex; // R=roughness, G=metallic
-
+// Transform the reflection ray's start & end into screen space ONCE, then march
+// the straight screen-space line by Hi-Z cell DDA
+layout(binding = 0) uniform sampler2D colorBuffer;    // lit scene (hdrTex)  -> "color"
+layout(binding = 1) uniform sampler2D depthBuffer;    // scene depth [0,1]   -> "depth"
+layout(binding = 2) uniform sampler2D normalBuffer;   // world normal [0,1]  -> "normal"
+layout(binding = 3) uniform sampler2D hiZBuffer;      // Hi-Z pyramid (CP-B) -> "HiZ"
+layout(binding = 4) uniform sampler2D materialBuffer; // R=rough, G=metal
 
 layout(push_constant) uniform SSRPush {
-    mat4 invProj;      // inverse of NO-JITTER projection
-    mat4 view;         // world -> view (to bring world normal into view space)
-    mat4 proj;         // NO-JITTER projection (view -> clip, for projecting march steps)
+    mat4 invProj;
+    mat4 view;
+    mat4 proj;
     vec2 screenSize;
     float nearZ;
     float farZ;
-    int   maxSteps;    // linear march step count
-    float stepSize;    // view-space distance per step
-    float thickness;   // depth-compare tolerance (view-space units)
+    int   maxSteps;
+    float stepSize;
+    float thickness;
     int   hizMipCount;
-
 } pc;
 
 layout(location = 0) in vec2 inUV;
-layout(location = 0) out vec4 outSSR;   // rgb = reflected color, a = hit mask (1=hit, 0=miss)
+layout(location = 0) out vec4 outSSR;
 
-float LinearizeDepth(float d) {
-    return (2.0 * pc.nearZ * pc.farZ) / (pc.farZ + pc.nearZ - d * (pc.farZ - pc.nearZ));
-}
-
-vec3 ReconstructViewPos(vec2 uv, float depth) {
+// View-space position from a UV + nonlinear depth.
+vec3 ViewPosFromDepth(vec2 uv, float depth) {
     vec4 ndc = vec4(uv * 2.0 - 1.0, depth, 1.0);
-    vec4 v = pc.invProj * ndc;
-    return v.xyz / v.w;
-}
-
-// Project a view-space point to screen UV. Returns uv, sets ok = false if behind camera.
-vec2 ProjectToUV(vec3 viewPos, out bool ok) {
-    vec4 clip = pc.proj * vec4(viewPos, 1.0);
-    ok = clip.w > 0.0;
-    vec3 ndc = clip.xyz / max(clip.w, 1e-6);
-    return ndc.xy * 0.5 + 0.5;
+    vec4 p = pc.invProj * ndc;
+    return p.xyz / p.w;
 }
 
 float EdgeFade(vec2 uv) {
-    // 0 at the very edge, 1 well inside; fade band ~10% of screen
     vec2 f = smoothstep(vec2(0.0), vec2(0.1), uv) * (1.0 - smoothstep(vec2(0.9), vec2(1.0), uv));
     return f.x * f.y;
 }
 
 void main()
 {
-    float depth = texture(depthTex, inUV).r;
+    float depth = texture(depthBuffer, inUV).r;
     if (depth >= 1.0) { outSSR = vec4(0.0); return; }   // sky
 
-    vec3 viewPos = ReconstructViewPos(inUV, depth);
-    vec3 worldN  = texture(normalTex, inUV).xyz * 2.0 - 1.0;
-    vec3 viewN   = normalize(mat3(pc.view) * worldN);
-    vec3 viewDir = normalize(viewPos);
-    vec3 reflDir = reflect(viewDir, viewN);
+    float roughness = texture(materialBuffer, inUV).r;
+    float roughFade = 1.0 - smoothstep(0.25, 0.45, roughness);
+    if (roughFade <= 0.0) { outSSR = vec4(0.0); return; }
 
-    float roughness = texture(materialTex, inUV).r;
-    float roughFade = 1.0 - smoothstep(0.25, 0.45, roughness);   // 1 below 0.25, ramps to 0 by 0.45
-    if (roughFade <= 0.0) { outSSR = vec4(0.0); return; }         // fully rough: skip the march entirely
+    // Build the reflection ray in view space
+    vec3 rayOriginVS = ViewPosFromDepth(inUV, depth);           // "rayOrigin"
+    vec3 normalWS    = texture(normalBuffer, inUV).xyz * 2.0 - 1.0;
+    vec3 normalVS    = normalize(mat3(pc.view) * normalWS);
+    vec3 toCameraVS  = normalize(rayOriginVS);                  // origin->cam dir is -normalize(pos), use normalize(pos) as incident
+    vec3 rayDirVS    = reflect(toCameraVS, normalVS);           // "rayDir"
 
-    // March the reflection ray. We advance in view space but use the Hi-Z pyramid
-    // to skip empty space: at each step, read the min/max linear depth of the current
-    // screen cell at mip level; if the ray segment can't intersect the surface in
-    // that cell (its linear depth is nearer than the cell's min), skip ahead and climb
-    // a mip. If it might intersect (overlaps the cell's depth range), descend for detail.
-    
-    vec3 rayPos = viewPos + reflDir * (0.05 + viewPos.z * -0.01);  // bias grows with depth    
-    int level = 0;                            // start fine, climb as we skip empty space
-    
+    // Ray endpoints in VIEW space
+    float maxDistance = 30.0;                                   // "maxDistance"
+    vec3 rayStartVS = rayOriginVS + rayDirVS * 0.05;            // small start bias
+    vec3 rayEndVS   = rayOriginVS + rayDirVS * maxDistance;
+
+    // Project endpoints to CLIP, then to SCREEN space
+    vec4 clipStart = pc.proj * vec4(rayStartVS, 1.0);
+    vec4 clipEnd   = pc.proj * vec4(rayEndVS,   1.0);
+
+    // Clip the end to in front of camera if it went behind (w <= 0).
+    if (clipEnd.w <= 0.0) {
+        float wNear = 1e-4;
+        float tClip = (wNear - clipStart.w) / (clipEnd.w - clipStart.w);
+        rayEndVS = mix(rayStartVS, rayEndVS, clamp(tClip, 0.0, 1.0));
+        clipEnd  = pc.proj * vec4(rayEndVS, 1.0);
+    }
+
+    // Perspective divide -> NDC -> screen. .z carries nonlinear depth [0,1].
+    vec3 rayStartSS = vec3((clipStart.xy / clipStart.w) * 0.5 + 0.5, clipStart.z / clipStart.w);
+    vec3 rayEndSS   = vec3((clipEnd.xy   / clipEnd.w)   * 0.5 + 0.5, clipEnd.z   / clipEnd.w);
+
+    vec4 result = vec4(0.0);
+
+    vec2 rayDirSS = rayEndSS.xy - rayStartSS.xy;   // 2D screen-space direction (UV units)
+    float rayLenSS = length(rayDirSS);
+    if (rayLenSS < 1e-6) { outSSR = vec4(0.0); return; }
+
+    int level = 0;
     int maxLevel = min(pc.hizMipCount - 1, 6);
-
-    vec4 hitColor = vec4(0.0);
+    float t = 0.0;                                  // parameter along the ray, 0..1
+    float tEps = (2.0 / max(pc.screenSize.x, pc.screenSize.y)) / rayLenSS;  // cross-cell nudge
 
     for (int i = 0; i < pc.maxSteps; i++) {
-        bool ok;
-        vec2 uv = ProjectToUV(rayPos, ok);
-        if (!ok || uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) break;
+        vec3 sampleSS = mix(rayStartSS, rayEndSS, t);
+        vec2 sampleUV = sampleSS.xy;
+        if (t > 1.0 || sampleUV.x < 0.0 || sampleUV.x > 1.0 ||
+                       sampleUV.y < 0.0 || sampleUV.y > 1.0)
+            break;
 
-        // Ray's linear depth at this point (view z is negative, linear eye distance = -z).
-        float rayLinZ = -rayPos.z;
-        float thick = pc.thickness * (1.0 + rayLinZ * 0.05);   // grows with distance; tune the 0.05
+        float rayZ = sampleSS.z;                    // nonlinear depth (same space as pyramid now)
 
-
-        // Read the Hi-Z cell at this mip: R=min, G=max linear depth in the cell's footprint
-        vec2 cell = textureLod(hizTex, uv, float(level)).rg;
+        // Hi-Z cell at this mip: R = min, G = max nonlinear depth in the cell footprint.
+        vec2 cell = textureLod(hiZBuffer, sampleUV, float(level)).rg;
         float cellMin = cell.x;
         float cellMax = cell.y;
 
-        // Does the ray's depth fall within (or past) the cell's occupied depth range?
-        // If the ray is still NEARER than everything in the cell (rayLinZ < cellMin - thickness),
-        // the cell is empty in front of the ray: skip ahead, climb a mip to skip faster.
-        if (rayLinZ < cellMin - thick || rayLinZ > cellMax + thick) {
-            // Cell count at this mip
-            vec2 mipSize = pc.screenSize / exp2(float(level));
+        // Exact t to the next spatial cell boundary at this mip (UV is linear in t).
+        vec2 mipSize  = pc.screenSize / exp2(float(level));
+        vec2 cellIdx  = floor(sampleUV * mipSize);
+        vec2 nextEdge = (cellIdx + step(0.0, rayDirSS)) / mipSize;
+        vec2 tToEdge  = (nextEdge - rayStartSS.xy) / (rayDirSS + vec2(1e-6));
+        float tCellCross = min(tToEdge.x, tToEdge.y);
 
-            // Current UV and a UV a tiny bit further along the ray (to get UV-space direction)
-            bool ok0, ok1;
-            vec2 uv0 = ProjectToUV(rayPos, ok0);
-            vec2 uv1 = ProjectToUV(rayPos + reflDir * 0.01, ok1);
-            vec2 uvDir = uv1 - uv0;                        // ray direction in UV space (unnormalized)
-
-            // Which cell are we in, and where are its far edges (in the direction of travel)?
-            vec2 cellUV = uv0 * mipSize;                   // position in cell units
-            vec2 cellEdge = floor(cellUV) + step(0.0, uvDir);   // next edge in each axis (0 or 1 side)
-            vec2 edgeUV = cellEdge / mipSize;              // UV of the next cell boundary per axis
-
-            // Parametric distance to each axis boundary: how far along uvDir to reach edgeUV
-            vec2 tEdge = (edgeUV - uv0) / (uvDir + vec2(1e-6));   // avoid div0
-            float tCell = min(tEdge.x, tEdge.y);           // nearest boundary
-            tCell = max(tCell, 0.0);
-
-            // Step the ray that far in view space, plus a small epsilon to cross into the next cell.
-            // tCell is in units of the 0.01 view-space probe, so scale back:
-            rayPos += reflDir * (tCell * 0.01 + 1e-4);
+        if (rayZ < cellMin - pc.thickness || rayZ > cellMax + pc.thickness) {
+            // Ray outside the cell's occupied depth band -> skip to boundary, climb a mip.
+            t = max(tCellCross, t) + tEps;
             level = min(level + 1, maxLevel);
-            continue;
-        }
-
-        // The ray has reached the cell's depth range. If we're at the finest mip, test for a hit.
-        if (level == 0) {
-            
-            // Compare against the actual surface depth at this pixel.
-            float sceneDepth = texture(depthTex, uv).r;
-            if (sceneDepth < 1.0) {
-                float sceneLinZ = LinearizeDepth(sceneDepth);
-                float delta = rayLinZ - sceneLinZ;
-                if (delta > 0.0 && delta < thick) {
-                    float edge = EdgeFade(uv);
-                    hitColor = vec4(texture(hdrTex, uv).rgb, edge * roughFade);   // alpha = fade, not just 1.0
+        } else {
+            // Ray within the [min,max] band.
+            if (level == 0) {
+                // Finest level: exact hit test against the real surface depth.
+                float sceneZ = texture(depthBuffer, sampleUV).r;
+                if (rayZ > sceneZ + 1e-5 && rayZ < sceneZ + pc.thickness) {
+                    result = vec4(texture(colorBuffer, sampleUV).rgb, EdgeFade(sampleUV) * roughFade);
                     break;
                 }
+                t = max(tCellCross, t) + tEps;   // no hit, step one cell forward
+            } else {
+                level = level - 1;               // descend for precision
             }
-
-            // No hit at mip0: nudge forward a small step and keep going.
-            vec2 mipSize = pc.screenSize;
-            bool okp;
-            vec2 uv1 = ProjectToUV(rayPos + reflDir * 0.01, okp);
-            vec2 uvDir = uv1 - uv;
-            vec2 cellUV = uv * mipSize;
-            vec2 cellEdge = floor(cellUV) + step(0.0, uvDir);
-            vec2 edgeUV = cellEdge / mipSize;
-            vec2 tEdge = (edgeUV - uv) / (uvDir + vec2(1e-6));
-            float tCell = max(min(tEdge.x, tEdge.y), 0.0);
-            rayPos += reflDir * (tCell * 0.01 + 1e-4);
-
-        } else {
-
-            // Potential intersection at a coarse mip: descend for precision, don't advance.
-            level = level - 1;
         }
     }
-
-    outSSR = hitColor;
+    outSSR = result;
 }

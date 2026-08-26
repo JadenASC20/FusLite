@@ -95,7 +95,7 @@ static bool  g_ssrEnabled = true;
 static float g_ssrReflectivity = 0.6f;
 static int   g_ssrMaxSteps = 64;
 static float g_ssrStepSize = 0.25f;
-static float g_ssrThickness = 0.5f;
+static float g_ssrThickness = 0.001f;
 
 static bool  g_ssaoEnabled = true;
 static float g_ssaoRadius = 0.5f;
@@ -1392,8 +1392,7 @@ int main() {
                     ImGui::Checkbox("SSR enabled", &g_ssrEnabled);
                     if (g_ssrEnabled) {
                         ImGui::SliderInt("Max steps", &g_ssrMaxSteps, 8, 256);
-                        ImGui::SliderFloat("Step size", &g_ssrStepSize, 0.02f, 1.0f, "%.3f");
-                        ImGui::SliderFloat("Thickness", &g_ssrThickness, 0.05f, 2.0f, "%.3f");
+                        ImGui::SliderFloat("Thickness", &g_ssrThickness, 0.0001f, 0.02f, "%.4f");
                     }
                     
                     ImGui::Separator();
