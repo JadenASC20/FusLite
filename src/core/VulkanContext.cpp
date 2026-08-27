@@ -98,10 +98,7 @@ std::vector<const char*> VulkanContext::GetRequiredExtensions()
 
     std::vector<const char*> extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
-    if (m_enableValidationLayers) {
-        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    }
-
+    extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     return extensions;
 }
 

@@ -73,6 +73,25 @@ void ShadowMap::Init(VulkanContext& context, uint32_t resolution)
         throw std::runtime_error("Failed to create shadow map sampler");
     }
 
+    // Comparison sampler for hardware PCF (sampler2DShadow). Same image, compare-enabled.
+    VkSamplerCreateInfo cmpInfo{};
+    cmpInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    cmpInfo.magFilter = VK_FILTER_LINEAR;      // LINEAR + compare = 2x2 hardware PCF
+    cmpInfo.minFilter = VK_FILTER_LINEAR;
+    cmpInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    cmpInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    cmpInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    cmpInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    cmpInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;  // off-map = far = lit
+    cmpInfo.compareEnable = VK_TRUE;
+    cmpInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;   // fragment depth <= stored => lit
+    cmpInfo.minLod = 0.0f;
+    cmpInfo.maxLod = VK_LOD_CLAMP_NONE;
+
+    if (vkCreateSampler(device, &cmpInfo, nullptr, &m_compareSampler) != VK_SUCCESS) {
+        throw std::runtime_error("Failed to create shadow compare sampler");
+    }
+
     printf("Shadow map created (%ux%u, D32_SFLOAT).\n", m_resolution, m_resolution);
 }
 
@@ -97,4 +116,5 @@ void ShadowMap::Cleanup(VkDevice device)
     if (m_depthImageView != VK_NULL_HANDLE) vkDestroyImageView(device, m_depthImageView, nullptr);
     if (m_depthImage != VK_NULL_HANDLE) vkDestroyImage(device, m_depthImage, nullptr);
     if (m_depthMemory != VK_NULL_HANDLE) vkFreeMemory(device, m_depthMemory, nullptr);
+    if (m_compareSampler != VK_NULL_HANDLE) vkDestroySampler(device, m_compareSampler, nullptr);
 }

@@ -88,17 +88,22 @@ void GraphicsPipeline::CreateDescriptorSetLayout()
     normalSamplerBinding.descriptorCount = 1;
     normalSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
+    VkDescriptorSetLayoutBinding shadowCmpBinding{};
+    shadowCmpBinding.binding = 12;
+    shadowCmpBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    shadowCmpBinding.descriptorCount = 1;
+    shadowCmpBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
     VkDescriptorSetLayoutBinding bindings[] = {
         uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding,
         irradianceBinding, prefilteredBinding, brdfLUTBinding, lightBufferBinding,
         clusterLightInfoBinding, lightIndexBinding, shadowMapBinding, rampBinding,
-        normalSamplerBinding
+        normalSamplerBinding, shadowCmpBinding
     };
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 12;
+    layoutInfo.bindingCount = 13;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
@@ -112,7 +117,7 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = maxSets;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = maxSets * 7;
+    poolSizes[1].descriptorCount = maxSets * 8; // bindings 1,2,3,4,5,9,11,12
     poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     poolSizes[2].descriptorCount = maxSets * 4; // lightBuffer, clusterLightInfo, lightIndex — 3 storage buffers now
 
@@ -134,7 +139,8 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
     const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
     const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
     const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer, 
-    VkImageView shadowMapView, VkSampler shadowMapSampler, const BufferAndMemory& rampBuffer)
+    VkImageView shadowMapView, VkSampler shadowMapSampler, VkSampler shadowCompareSampler, 
+    const BufferAndMemory& rampBuffer)
 {
     uint32_t numImages = static_cast<uint32_t>(uniformBuffers.size());
     std::vector<VkDescriptorSetLayout> layouts(numImages, m_descriptorSetLayout);
@@ -211,7 +217,12 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         normalInfo.imageView = normalTexture.view;
         normalInfo.sampler = normalTexture.sampler;
 
-        VkWriteDescriptorSet writes[12]{};
+        VkDescriptorImageInfo shadowCmpInfo{};
+        shadowCmpInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        shadowCmpInfo.imageView = shadowMapView;          // same view as binding 9
+        shadowCmpInfo.sampler = shadowCompareSampler;   // compare sampler
+
+        VkWriteDescriptorSet writes[13]{};
 
         writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstSet = sets[i];
@@ -297,7 +308,14 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
         writes[11].descriptorCount = 1;
         writes[11].pImageInfo = &normalInfo;
 
-        vkUpdateDescriptorSets(m_device, 12, writes, 0, nullptr);
+        writes[12].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[12].dstSet = sets[i];
+        writes[12].dstBinding = 12;
+        writes[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[12].descriptorCount = 1;
+        writes[12].pImageInfo = &shadowCmpInfo;
+
+        vkUpdateDescriptorSets(m_device, 13, writes, 0, nullptr);
     }
 
     return sets;

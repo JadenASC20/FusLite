@@ -34,20 +34,29 @@ vec3 ReconstructWorldPos(vec2 uv, float depth) {
     return world.xyz;
 }
 
-// Depth-aware 4x4 blur of the AO buffer. Rejects samples across depth
-// discontinuities so AO doesn't bleed across silhouette edges. Runs here in
-// composite (no separate pass) — reuses depthTex already bound at binding 3.
-float BlurAO(vec2 uv, float centerDepth) {
+// Depth-aware blur of the AO buffer, comparing LINEAR view-space depth so the
+// reject threshold means the same thing near and far. Centred 3x3 kernel.
+float LinearizeDepth(float d) {
+    // Reconstruct view-space Z magnitude from non-linear depth via invProj.
+    vec4 ndc = vec4(0.0, 0.0, d, 1.0);
+    vec4 v = pc.invProj * ndc;
+    return abs(v.z / v.w);
+}
+
+float BlurAO(vec2 uv, float centerRawDepth) {
     vec2 texel = 1.0 / vec2(textureSize(ssaoTex, 0));
+    float centerZ = LinearizeDepth(centerRawDepth);
     float sum = 0.0;
     float weight = 0.0;
-    for (int x = -2; x < 2; x++) {
-        for (int y = -2; y < 2; y++) {
+    // Centred 3x3 (x,y in -1..1). Use -1..2 if you want a wider 4-wide kernel,
+    // but keep it symmetric — do not use -2..1 (off-centre).
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
             vec2 o = vec2(float(x), float(y)) * texel;
             float sd = texture(depthTex, uv + o).r;
-            // Relative depth reject. Nonlinear depth, so scale the threshold by
-            // depth (differences shrink with distance); tuneable constant.
-            if (abs(sd - centerDepth) < 0.001) {
+            float sz = LinearizeDepth(sd);
+            // Reject across depth edges, now in linear (world-unit) space.
+            if (abs(sz - centerZ) < 0.1) {   // ~0.1 view-space units; tune
                 sum += texture(ssaoTex, uv + o).r;
                 weight += 1.0;
             }
@@ -93,7 +102,7 @@ void main()
     float centerDepth = texture(depthTex, inUV).r;   // or reuse your existing depth sample
     
     float ao = BlurAO(inUV, centerDepth);
-    ao = pow(ao, 4.0);    
+    ao = pow(ao, 2.0);    
     ao = mix(1.0, ao, pc.aoStrength);
     outColor = vec4((hdr + reflection * F * reflStrength) * ao, 1.0);
 

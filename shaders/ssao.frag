@@ -42,6 +42,7 @@ void main() {
     mat3 TBN = mat3(T, B, N);
 
     float occlusion = 0.0;
+    int valid = 0;
     for (int i = 0; i < KERNEL_SIZE; i++) {
         vec3 samplePos = fragPos + (TBN * kern.samples[i].xyz) * pc.radius;
         vec4 offset = pc.proj * vec4(samplePos, 1.0);
@@ -49,11 +50,13 @@ void main() {
         vec2 sampleUV = offset.xy * 0.5 + 0.5;
         if (sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0) continue;
 
+        valid++;   // <-- THIS is the missing line: count samples that stayed on-screen
+
         float sd = texture(depthTex, sampleUV).r;
         float sampleZ = ReconstructViewPos(sampleUV, sd).z;
         float rangeCheck = smoothstep(0.0, 1.0, pc.radius / abs(fragPos.z - sampleZ));
         if (sampleZ >= samplePos.z + pc.bias) occlusion += rangeCheck;
     }
-    occlusion = 1.0 - (occlusion / float(KERNEL_SIZE));
+    occlusion = (valid > 0) ? 1.0 - (occlusion / float(valid)) : 1.0;
     outAO = pow(clamp(occlusion, 0.0, 1.0), pc.power);
 }

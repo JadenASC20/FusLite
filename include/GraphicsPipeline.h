@@ -32,7 +32,8 @@ public:
         const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
         const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
         const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer,
-        VkImageView shadowMapView, VkSampler shadowMapSampler, const BufferAndMemory& rampBuffer);
+        VkImageView shadowMapView, VkSampler shadowMapSampler, VkSampler shadowCompareSampler, 
+        const BufferAndMemory& rampBuffer);
 
     void PushParams(VkCommandBuffer commandBuffer, const RenderParams& params) const;
     void BindTransparent(VkCommandBuffer cb) const {

@@ -20,6 +20,7 @@ public:
     VkImage GetImage() const { return m_depthImage; }
     VkImageView GetImageView() const { return m_depthImageView; }
     VkSampler GetSampler() const { return m_sampler; }
+    VkSampler GetCompareSampler() const { return m_compareSampler; }
     VkFormat GetFormat() const { return m_format; }
     uint32_t GetResolution() const { return m_resolution; }
 
@@ -30,4 +31,6 @@ private:
     VkDeviceMemory m_depthMemory = VK_NULL_HANDLE;
     VkImageView m_depthImageView = VK_NULL_HANDLE;
     VkSampler m_sampler = VK_NULL_HANDLE;
+    VkSampler m_compareSampler = VK_NULL_HANDLE;
+
 };

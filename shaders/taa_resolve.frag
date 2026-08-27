@@ -25,6 +25,10 @@ vec3 YCoCgToRGB(vec3 c) {
     return vec3(t + c.y, c.x + c.z, t - c.y);
 }
 
+float Luma(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
 void main() {
     vec3 current = texture(currentColor, uv).rgb;
 
@@ -89,5 +93,13 @@ void main() {
     // as disocclusion confidence drops. 0 pull -> untouched; strong pull -> reject.
     float alpha = mix(pc.blendAlpha, 1.0, disocclude);
 
-    outColor = vec4(mix(history, current, alpha), 1.0);
+    // Karis tonemap-weighted blend: down-weight bright fireflies (metallic flake
+    // specular) so a single hot pixel can't dominate the history average and
+    // flicker forever. Weight by 1/(1+luma), mix, then invert the weighting.
+    float wCurrent = 1.0 / (1.0 + Luma(current));
+    float wHistory = 1.0 / (1.0 + Luma(history));
+    vec3 blended = (current * wCurrent * alpha + history * wHistory * (1.0 - alpha))
+                 / max(wCurrent * alpha + wHistory * (1.0 - alpha), 1e-5);
+
+    outColor = vec4(blended, 1.0);
 }

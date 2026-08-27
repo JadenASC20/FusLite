@@ -104,14 +104,17 @@ static float g_ssaoPower = 1.5f;
 
 static bool g_customShadowEnabled = false;
 
+bool  g_autoRotate = false;  // optional: spin automatically
+float g_autoRotateSpeed = 20.0f; // deg/sec
+
 const char* debugViewNames[] = { "Off (normal render)", "HDR", "Motion", "Normal", "Depth", "SSR", "SSAO" };
 #if SCENE_HERO_MCLAREN
 
 const std::vector<std::string> modelPaths = {
-    "assets/McLarenShowcaseDemo/McLaren.glb",
-    "assets/McLarenShowcaseDemo/McLarenStage.glb"
+    "assets/ChevColoradoShowcaseDemo/ChevColorado.glb",
+    "assets/FusLiteStageCylinder.glb"
 };
-const char* skyboxHdri = "assets/McLarenShowcaseDemo/McLarenAutoshop.hdr";
+const char* skyboxHdri = "assets/victoria_curve.hdr";
 #else
 const std::vector<std::string> modelPaths = {
     "assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj","assets/ShaderBallShowcase/ShaderBall.obj",
@@ -136,14 +139,12 @@ void MouseMoveCallback(GLFWwindow* window, double x, double y)
 {
     if (g_camera) g_camera->OnMouseMove(x, y);
 }
-
 void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods)
 {
     if (!ImGuiManager::IsMouseControlledByImGui() && g_camera) {
         g_camera->OnMouseButton(button, action);
     }
 }
-
 void TransitionImage(VkCommandBuffer cmd, VkImage image, VkImageLayout oldLayout, VkImageLayout newLayout,
     VkImageAspectFlags aspect, VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
     VkAccessFlags srcAccess, VkAccessFlags dstAccess)
@@ -892,7 +893,7 @@ int main() {
             }
             showcaseSpheres[i].CreateDescriptorSets(pipeline, showcaseUniformBuffers[i], sizeof(UniformBufferObject),
                 iblTextures, lightBuffer, lightCuller.GetClusterLightInfoBuffer(), lightCuller.GetLightIndexBuffer(),
-                shadowMap.GetImageView(), shadowMap.GetSampler(), rampBuffer);
+                shadowMap.GetImageView(), shadowMap.GetSampler(), shadowMap.GetCompareSampler(), rampBuffer);
         }
         
         VkShaderModule fullscreenVert = CreateShaderModuleFromBinary(context.GetDevice(), "shaders/fullscreen.vert.spv");
@@ -1098,12 +1099,12 @@ int main() {
             car.name = "McLaren Car";
             car.transform = glm::mat4(1.0f);
             car.colorTint = glm::vec3(0.8f, 0.05f, 0.05f);
-            car.roughness = 0.35f; 
-            car.metallic = 1.0f;      // paint: metallic base + clearcoat
-            car.clearcoatFactor = 1.0f; 
-            car.clearcoatRoughness = 0.05f;
-            car.flakeStrength = 0.08f; 
-            car.flakeScale = 1000.0f;
+            car.roughness = 1.0f; 
+            car.metallic = 0.0f;      // paint: metallic base + clearcoat
+            car.clearcoatFactor = 0.0f; 
+            car.clearcoatRoughness = 0.0f;
+            car.flakeStrength = 0.0f; 
+            car.flakeScale = 0.0f;
             g_sceneObjects.push_back(car);
 
             SceneObject disc;
@@ -1167,13 +1168,13 @@ int main() {
 
                     // default: no clearcoat, no flake
                     mp.clearcoatFactor = 0.0f;
-                    mp.clearcoatRoughness = 0.03f;
+                    mp.clearcoatRoughness = 1.0f;
                     mp.flakeStrength = 0.0f;
-                    mp.flakeScale = 400.0f;
+                    mp.flakeScale = 0.0f;
 
                     if (contains(n, "CarPaint") && !contains(n, "Trim")) {
-                        mp.clearcoatFactor = 1.0f; mp.clearcoatRoughness = 0.04f;
-                        mp.flakeStrength = 0.3f; mp.flakeScale = 2000.0f;
+                        mp.clearcoatFactor = 0.0f; mp.clearcoatRoughness = 0.00f;
+                        mp.flakeStrength = 0.0f; mp.flakeScale = 0.0f;
                     }
                     else if (contains(n, "Carbon")) {
                         mp.clearcoatFactor = 0.8f; mp.clearcoatRoughness = 0.08f;
@@ -1187,7 +1188,26 @@ int main() {
                     else if (contains(n, "Light")) {
                         mp.clearcoatFactor = 0.5f;
                     }
-                    // everything else: no clearcoat, no flake (defaults above)
+                    // Chevy Colorado material roles
+                    else if (contains(n, "Tire")) {
+                        mp.roughness = 0.9f; mp.metallic = 0.0f;   // rubber: matte, non-metal
+                        mp.clearcoatFactor = 0.0f;
+                    }
+                    else if (contains(n, "Rim")) {
+                        mp.roughness = 0.35f; mp.metallic = 1.0f;  // metal rim, but not a mirror
+                    }
+                    else if (contains(n, "Chrome")) {
+                        mp.roughness = 0.1f; mp.metallic = 1.0f;   // chrome: shiny is correct here
+                    }
+                    else if (contains(n, "Tire") == false && contains(n, "PlasticRough")) {
+                        mp.roughness = 0.7f; mp.metallic = 0.0f;   // rough plastic trim
+                    }
+                    else if (contains(n, "Seat") || contains(n, "Leather") || contains(n, "Fabric") ||
+                        contains(n, "Cloth") || contains(n, "Interior")) {
+                        mp.roughness = 1.0f; mp.metallic = 0.0f;   // seats: matte, non-metal
+                        mp.clearcoatFactor = 0.0f;
+            
+                    }
                 }
             };
 
@@ -1204,6 +1224,8 @@ int main() {
             glfwPollEvents();
             float currentTime = std::chrono::duration<float>(std::chrono::high_resolution_clock::now() - startTime).count();
             float deltaTime = currentTime - lastFrameTime;
+
+
             lastFrameTime = currentTime;
             camera.Update(deltaTime);
 
@@ -1274,6 +1296,22 @@ int main() {
             float b = HalfToFloat(px[2]);
             g_measuredLuminance = dot_luma(r, g, b);
 
+            // --- Per-object turntable rotation ---
+            // Auto-rotate advances the selected object's angle.
+            if (g_autoRotate && g_selectionType == SelectionType::Object &&
+                g_selectedIndex >= 0 && g_selectedIndex < (int)g_sceneObjects.size()) {
+                g_sceneObjects[g_selectedIndex].rotationY =
+                    fmodf(g_sceneObjects[g_selectedIndex].rotationY + g_autoRotateSpeed * deltaTime, 360.0f);
+            }
+            // Rebuild each object's transform: base (gizmo translation/scale) * turntable rotation.
+            for (size_t i = 0; i < g_sceneObjects.size(); i++) {
+                g_sceneObjects[i].transform =
+                    g_sceneObjects[i].baseTransform *
+                    glm::rotate(glm::mat4(1.0f),
+                        glm::radians(g_sceneObjects[i].rotationY),
+                        glm::vec3(0.0f, 1.0f, 0.0f));
+            }
+
             for (size_t i = 0; i < g_sceneObjects.size(); i++) {
 
                 const SceneObject& o = g_sceneObjects[i];
@@ -1321,7 +1359,7 @@ int main() {
                         glm::value_ptr(gizmoProj),
                         ImGuizmo::TRANSLATE,
                         ImGuizmo::WORLD,
-                        glm::value_ptr(g_sceneObjects[g_selectedIndex].transform)
+                        glm::value_ptr(g_sceneObjects[g_selectedIndex].baseTransform)
                     );
                 }
 
@@ -1440,6 +1478,13 @@ int main() {
                     if (g_selectionType == SelectionType::Object && g_selectedIndex >= 0 && g_selectedIndex < static_cast<int>(g_sceneObjects.size())) {
                         SceneObject& obj = g_sceneObjects[g_selectedIndex];
                         ImGui::Text("Object: %s", obj.name.c_str());
+                        
+                        ImGui::Separator();
+                        ImGui::Text("Turntable");
+                        ImGui::SliderFloat("Rotation", &obj.rotationY, 0.0f, 360.0f, "%.1f deg");
+                        ImGui::Checkbox("Auto-rotate", &g_autoRotate);
+                        if (g_autoRotate)
+                            ImGui::SliderFloat("Speed", &g_autoRotateSpeed, 5.0f, 120.0f, "%.0f deg/s");
 
                         ImGui::Separator();
                         ImGui::ColorEdit3("Color", &obj.colorTint.x);

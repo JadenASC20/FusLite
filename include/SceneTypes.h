@@ -18,6 +18,8 @@ struct SceneObject
 {
     std::string name;
     glm::mat4 transform = glm::mat4(1.0f);
+    glm::mat4 baseTransform = glm::mat4(1.0f);
+    float rotationY = 0.0f;
     glm::vec3 colorTint = glm::vec3(1.0f);
     
     std::vector<MaterialParams> materials;

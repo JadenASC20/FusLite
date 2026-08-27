@@ -34,7 +34,7 @@ public:
         const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
         const VulkanContext::IBLTextures& iblTextures, const BufferAndMemory& lightBuffer,
         const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer,
-        VkImageView shadowMapView, VkSampler shadowMapSampler, const BufferAndMemory& rampBuffer);
+        VkImageView shadowMapView, VkSampler shadowMapSampler, VkSampler shadowCompareSampler, const BufferAndMemory& rampBuffer);
 
     void DrawOpaque(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout, uint32_t imageIndex,
         RenderParams base, const std::vector<MaterialParams>& mats) const;

@@ -17,7 +17,7 @@ layout(push_constant) uniform HiZPush {
     float _pad2;
 } pc;
 
-// Vulkan reverse? No — standard [0,1] nonlinear depth. Linearize to positive view-space distance.
+// standard [0,1] nonlinear depth. Linearize to positive view-space distance.
 float LinearizeDepth(float d)
 {
     // d in [0,1] NDC z. Returns positive linear eye distance.

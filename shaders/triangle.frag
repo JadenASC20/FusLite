@@ -70,6 +70,7 @@ layout(std430, binding = 10) readonly buffer PenumbraRampBuffer {
 } rampBuffer;
 
 layout(binding = 11) uniform sampler2D normalSampler;
+layout(binding = 12) uniform sampler2DShadow shadowMapCmp;   
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
@@ -189,8 +190,8 @@ vec3 ApplyFlakeNormal(vec3 N, vec3 tangent, vec3 bitangent, vec2 uv, float flake
     return normalize(N + perturb);
 }
 
-const int BLOCKER_SAMPLES = 24;
-const int PCF_SAMPLES = 32;
+const int BLOCKER_SAMPLES = 12;
+const int PCF_SAMPLES = 16;
 
 const vec2 POISSON[32] = vec2[](
     vec2(-0.94201624, -0.39906216), vec2( 0.94558609, -0.76890725),
@@ -262,8 +263,9 @@ float ComputeShadow(vec3 fragPosWorld, vec3 N, vec3 L)
     for (int i = 0; i < PCF_SAMPLES; i++) {
         vec2 o = POISSON[i];
         vec2 r = vec2(o.x * rotCos - o.y * rotSin, o.x * rotSin + o.y * rotCos);
-        float sampleDepth = texture(shadowMap, projCoords.xy + r * filterRadius).r;
-        shadow += (currentDepth - bias > sampleDepth) ? 0.0 : 1.0;
+        vec2 sampleUV = projCoords.xy + r * filterRadius;     // <-- offset the tap
+        // HW compare: returns filtered (currentDepth - bias <= storedDepth) ? lit : shadowed
+        shadow += texture(shadowMapCmp, vec3(sampleUV, currentDepth - bias));
     }
 
     return shadow / float(PCF_SAMPLES);
@@ -311,6 +313,7 @@ void main() {
     vec3 geometricN = N;   // <-- SSR G-buffer uses THIS (pre-normalmap, pre-flake). Do not change.
 
     // Per-vertex tangent frame (crisp on curved surfaces, no screen-space wobble).
+    
     vec3 T = normalize(fragTangentWorld.xyz);
     // Gram-Schmidt re-orthogonalize against the interpolated normal.
     T = normalize(T - N * dot(N, T));
@@ -327,6 +330,7 @@ void main() {
     // Flake perturbs the normal-mapped surface (shading only, never the SSR normal).
     N = ApplyFlakeNormal(N, approxTangent, approxBitangent, fragTexCoord, pc.flakeScale, pc.flakeStrength);
     
+
     vec3 V = normalize(ubo.cameraPos.xyz - fragPosWorld);
     float NdotV = max(dot(N, V), 0.0);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
@@ -456,11 +460,12 @@ void main() {
     vec2 brdf = texture(brdfLUT, vec2(NdotV, roughness)).rg;
     
     vec3 specularIBL = prefilteredColor * (F0 * brdf.x + brdf.y);
+    // vec3 specularIBL = vec3(0.0); 
     specularIBL *= IBL_SPECULAR_STRENGTH;   // replace the (1.0 - roughness) with a flat global cut
     vec3 ambient = kD_ibl * diffuseIBL + specularIBL;    
     float ambientOcclusion = mix(0.35, 1.0, surfaceShadow);
     vec3 finalColor = ambient * ambientOcclusion + outgoing;
-
+    
     if (pc.colorTint.a < 0.999) {
         // Environment reflection, Fresnel-weighted but capped so it never fully replaces the surface.
         vec3 glassRefl = textureLod(prefilteredMap, R, 0.0).rgb;   // mip 0 = sharp
@@ -475,10 +480,6 @@ void main() {
     } else {
         outColor = vec4(finalColor, pc.colorTint.a);
     }
-    
-    // DEBUGGING
-    // outColor = vec4(texture(normalSampler, fragTexCoord).xyz, 1.0);
-    //outColor = vec4(fract(fragTexCoord), 0.0, 1.0);
 
     // Screen-space motion in UV units: where this pixel was, minus where it is.
     vec2 currentNDC = fragClipPos.xy / fragClipPos.w;
@@ -487,5 +488,6 @@ void main() {
     outNormal = vec4(geometricN * 0.5 + 0.5, 1.0);
 
     outMaterial = vec2(roughness, metallic);
+
 
 }
