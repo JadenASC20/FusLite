@@ -33,13 +33,12 @@ void main() {
     vec3 current = texture(currentColor, uv).rgb;
 
     // Passthrough paths: frame 0, or blendAlpha driven to 1.0 from the GUI.
-    // COMMIT 3 leaves blendAlpha at 1.0 to prove the plumbing + copy path.
     if (pc.firstFrame == 1 || pc.blendAlpha >= 0.999) {
         outColor = vec4(current, 1.0);
         return;
     }
 
-    // --- Reproject ---
+    // Reprojection
     // triangle.frag writes outMotion = (prevNDC - currentNDC) * 0.5, so in this
     // engine's UV convention history lives at uv + motion. If the SIGN TEST
     // (pan vertical vs horizontal) shows one axis ghosting, flip that axis here.
@@ -54,7 +53,7 @@ void main() {
 
     vec3 history = texture(historyColor, histUV).rgb;
 
-    // --- Neighborhood color box (variance clip, Salvi/Karis) ---
+    // Neighborhood color box (variance clip, Salvi/Karis)
     vec3 cMin = vec3( 1e9);
     vec3 cMax = vec3(-1e9);
     vec3 m1   = vec3(0.0);
@@ -78,7 +77,7 @@ void main() {
     vec3 histClamp = clamp(histRaw, boxMin, boxMax);
     history = YCoCgToRGB(histClamp);
 
-    // --- Disocclusion confidence (clamp-distance heuristic) ---
+    // Disocclusion confidence (clamp-distance heuristic)
     // How far the history had to be pulled to fit the neighborhood box, measured
     // on luma (the .x channel) and normalized by the local contrast (sigma.x).
     // A large pull means the reprojected history disagreed strongly with what's
@@ -96,6 +95,7 @@ void main() {
     // Karis tonemap-weighted blend: down-weight bright fireflies (metallic flake
     // specular) so a single hot pixel can't dominate the history average and
     // flicker forever. Weight by 1/(1+luma), mix, then invert the weighting.
+
     float wCurrent = 1.0 / (1.0 + Luma(current));
     float wHistory = 1.0 / (1.0 + Luma(history));
     vec3 blended = (current * wCurrent * alpha + history * wHistory * (1.0 - alpha))
