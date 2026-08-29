@@ -121,7 +121,6 @@ namespace {
         ImGui::Checkbox("SSR enabled", &ssr.enabled);
         if (!ssr.enabled) return;
 
-        ImGui::SliderFloat("Reflectivity", &ssr.reflectivity, 0.0f, 1.0f, "%.2f");
         ImGui::SliderInt("Max steps", &ssr.maxSteps, 8, 256);
         ImGui::SliderFloat("Step size", &ssr.stepSize, 0.05f, 1.0f, "%.3f");
         ImGui::SliderFloat("Thickness", &ssr.thickness, 0.0001f, 0.02f, "%.4f");

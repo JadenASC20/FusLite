@@ -25,7 +25,7 @@
 #include <cstdlib>
 #include <stdexcept>
 
-// 
+
 // >>> CHANGE THIS TO SWITCH SCENES <<<
 // ScenePreset::McLaren | ScenePreset::Colorado | ScenePreset::ShaderBalls
 constexpr ScenePreset kActiveScene = ScenePreset::McLaren;
