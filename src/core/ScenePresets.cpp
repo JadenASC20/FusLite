@@ -17,7 +17,7 @@ namespace {
 
     // Set to false once the material names are settled. The per-material dump is
     // noisy, but it's the only way to see why a role didn't match.
-    constexpr bool kLogMaterialRoles = true;
+    constexpr bool kLogMaterialRoles = false;
 
     SceneObject MakeStageObject()
     {
@@ -104,13 +104,12 @@ namespace {
         return desc;
     }
 
-    // ---------------------------------------------------------------------------
     // Name matching.
     //
     // Case-insensitive, because nothing guarantees an exporter preserves the
     // artist's capitalisation. Substring, not exact, because names arrive looking
     // like "Chevy_Windshield_Glass.001".
-    // ---------------------------------------------------------------------------
+    // 
     bool NameContains(const std::string& haystack, const char* needle)
     {
         const size_t hlen = haystack.size();
@@ -129,14 +128,13 @@ namespace {
         return false;
     }
 
-    // ---------------------------------------------------------------------------
+    // 
     // Transparency tagging.
     //
     // The old predicate checked only "Glass" and "Window", which misses
     // "Windshield" and "Windscreen" -- neither string contains "Window". A missed
     // tag sends the material down the OPAQUE path with blending disabled, which
     // renders as flat unblended white over the cabin.
-    // ---------------------------------------------------------------------------
     bool IsGlassMaterial(const std::string& n)
     {
         // Explicit opt-out wins: assets often ship an "Opaque_Glass" trim piece.
@@ -154,7 +152,7 @@ namespace {
             || NameContains(n, "Translucent");
     }
 
-} // namespace
+}
 
 SceneDescription BuildScene(ScenePreset preset)
 {
