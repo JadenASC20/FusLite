@@ -86,6 +86,12 @@ add_executable(FusLite
     src/core/SSRPipeline.cpp
     src/core/HiZPipeline.cpp
     src/core/SSAOPipeline.cpp
+    src/core/AppState.cpp
+    src/core/FrameRecorder.cpp
+    src/core/EditorUI.cpp
+    src/core/Renderer.cpp
+    src/core/ScenePresets.cpp
+    src/core/VulkanHelpers.cpp
 
     # ImGui core
     ${IMGUI_DIR}/imgui.cpp

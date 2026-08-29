@@ -368,15 +368,6 @@ void RenderPass::CreateLuminanceResources()
         throw std::runtime_error("Failed to allocate luminance image memory");
     vkBindImageMemory(m_context->GetDevice(), m_lumImage, m_lumImageMemory, 0);
 
-    VkImageViewCreateInfo viewInfo{};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = m_lumImage;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = m_hdrFormat;
-    viewInfo.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-    if (vkCreateImageView(m_context->GetDevice(), &viewInfo, nullptr, &m_lumImageView) != VK_SUCCESS)
-        throw std::runtime_error("Failed to create luminance image view");
-
     // Host-visible staging buffers, one per frame-in-flight
     VkDeviceSize texelBytes = 8; // R16G16B16A16_SFLOAT
     for (int f = 0; f < 2; f++) {
@@ -671,16 +662,15 @@ void RenderPass::CreateMaterialResources(const Swapchain& swapchain)
 
 void RenderPass::Cleanup()
 {
+    if (!m_context) return;
+
     for (int f = 0; f < 2; f++) {
         if (m_lumStagingMapped[f]) { vkUnmapMemory(m_context->GetDevice(), m_lumStagingMemories[f]); m_lumStagingMapped[f] = nullptr; }
         if (m_lumStagingBuffers[f]) vkDestroyBuffer(m_context->GetDevice(), m_lumStagingBuffers[f], nullptr);
         if (m_lumStagingMemories[f]) vkFreeMemory(m_context->GetDevice(), m_lumStagingMemories[f], nullptr);
     }
-    if (m_lumImageView)   vkDestroyImageView(m_context->GetDevice(), m_lumImageView, nullptr);
     if (m_lumImage)       vkDestroyImage(m_context->GetDevice(), m_lumImage, nullptr);
     if (m_lumImageMemory) vkFreeMemory(m_context->GetDevice(), m_lumImageMemory, nullptr);
-
-    if (!m_context) return;
 
     for (size_t i = 0; i < m_depthImages.size(); i++) {
         vkDestroyImageView(m_context->GetDevice(), m_depthImageViews[i], nullptr);

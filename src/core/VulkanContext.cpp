@@ -334,6 +334,7 @@ void VulkanContext::CreateLogicalDevice()
 
     VkPhysicalDeviceFeatures deviceFeatures{};
     deviceFeatures.samplerAnisotropy = VK_TRUE;
+    deviceFeatures.independentBlend = VK_TRUE;
 
     // Opt into dynamic rendering — this is what removes the need for VkRenderPass/VkFramebuffer
     VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeature{};

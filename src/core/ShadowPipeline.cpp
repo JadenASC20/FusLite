@@ -5,8 +5,6 @@
 #include <stdexcept>
 #include <cstdio>
 #include <algorithm>
-
-
 #include <stdexcept>
 #include <cstdio>
 

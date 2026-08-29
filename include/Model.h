@@ -52,9 +52,9 @@ public:
     uint32_t GetTriangleCount() const { return m_triangleCount; }
 
 private:
-    VulkanTexture LoadCgltfTexture(VulkanContext& context, const struct cgltf_data* data,
-        const struct cgltf_texture_view* texView, const std::filesystem::path& modelDir,
-        const char* debugLabel, bool isColorData);
+    VulkanTexture LoadCgltfTexture(VulkanContext& context,
+        const cgltf_texture_view* texView, const std::filesystem::path& modelDir,
+        const char* debugLabel, bool isColorData, glm::vec4 fallbackColor);
 
     void DrawFilteredImpl(VkCommandBuffer commandBuffer, VkPipelineLayout pipelineLayout,
         uint32_t imageIndex, RenderParams base, const std::vector<MaterialParams>& mats,

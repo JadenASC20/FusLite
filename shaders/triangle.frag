@@ -310,6 +310,14 @@ void main() {
     float clearcoatRoughness = pc.clearcoatRoughness;
 
     vec3 N = normalize(fragNormalWorld);
+
+    // Two-sided shading. With VK_CULL_MODE_NONE, single-sided interior surfaces
+    // (dash, seat backs, door cards) present their back face to a viewer outside
+    // the cabin. Their normal points away, so every N·V and N·L inverts. Flipping
+    // here — before the TBN is built — keeps the whole tangent frame consistent.
+    float faceSign = gl_FrontFacing ? 1.0 : -1.0;
+    N *= faceSign;
+
     vec3 geometricN = N;   // <-- SSR G-buffer uses THIS (pre-normalmap, pre-flake). Do not change.
 
     // Per-vertex tangent frame (crisp on curved surfaces, no screen-space wobble).
@@ -475,7 +483,7 @@ void main() {
 
         // Alpha stays low and CONSTANT so glass is always see-through.
         // (Optional slight bump at grazing edges, but keep the face see-through.)
-        float glassAlpha = mix(pc.colorTint.a, 0.1, fresnel);   // 0.25 face-on  0.6 at edges (not 1.0)
+        float glassAlpha = mix(pc.colorTint.a, 0.6, fresnel);   // 0.25 face-on  0.6 at edges (not 1.0)
         outColor = vec4(finalColor, glassAlpha);
     } else {
         outColor = vec4(finalColor, pc.colorTint.a);

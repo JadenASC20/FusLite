@@ -10,101 +10,156 @@
 
 #include <stdexcept>
 #include <cstdio>
+#include <array>
+#include <deque>
+#include <algorithm>
+#include <vector>
+
+
+// Binding table : single source of truth for the scene descriptor set.
+//
+// The set layout, the pool sizes, and the per-write descriptorType are ALL
+// derived from this table. Adding a binding means adding one row here plus one
+// chained call in CreateDescriptorSetsForMaterial -- nothing else.
+//
+// Keep this in sync with triangle.frag's layout(binding = N) declarations.
+
+namespace {
+
+    constexpr VkShaderStageFlags kVS = VK_SHADER_STAGE_VERTEX_BIT;
+    constexpr VkShaderStageFlags kFS = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    struct BindingDesc {
+        uint32_t           binding;
+        VkDescriptorType   type;
+        VkShaderStageFlags stages;
+        uint32_t           count;
+    };
+
+    constexpr BindingDesc kSceneBindings[] = {
+        {  0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,         kVS | kFS, 1 }, // ubo
+        {  1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // diffuse
+        {  2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // metallicRoughness
+        {  3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // irradiance
+        {  4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // prefiltered
+        {  5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // brdfLUT
+        {  6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kFS,       1 }, // lights
+        {  7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kFS,       1 }, // clusterLightInfo
+        {  8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kFS,       1 }, // lightIndices
+        {  9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // shadowMap (linear)
+        { 10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,         kFS,       1 }, // ramp
+        { 11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // normal
+        { 12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kFS,       1 }, // shadowCmp
+    };
+
+    constexpr uint32_t kSceneBindingCount =
+        static_cast<uint32_t>(std::size(kSceneBindings));
+
+    VkDescriptorType TypeOfBinding(uint32_t binding)
+    {
+        for (const auto& b : kSceneBindings)
+            if (b.binding == binding) return b.type;
+        throw std::runtime_error("Unknown descriptor binding");
+    }
+
+}
+
+// DescriptorWriter
+//
+// vkUpdateDescriptorSets takes POINTERS to the info structs, so every info must
+// stay alive and at a stable address until Update() runs. std::deque never
+// invalidates references to existing elements on push_back, unlike vector.
+//
+// descriptorType is looked up from the binding table rather than retyped at the
+// call site, so a write can't silently disagree with the layout -- that class of
+// mismatch produces no validation error and shows up as wrong pixels.
+
+class DescriptorWriter {
+public:
+    DescriptorWriter& Buffer(uint32_t binding, VkBuffer buffer,
+        VkDeviceSize range = VK_WHOLE_SIZE,
+        VkDeviceSize offset = 0)
+    {
+        m_bufferInfos.push_back(VkDescriptorBufferInfo{ buffer, offset, range });
+
+        m_writes.push_back(VkWriteDescriptorSet{});
+        VkWriteDescriptorSet& w = m_writes.back();
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstBinding = binding;
+        w.dstArrayElement = 0;
+        w.descriptorType = TypeOfBinding(binding);
+        w.descriptorCount = 1;
+        w.pBufferInfo = &m_bufferInfos.back();
+        return *this;
+    }
+
+    DescriptorWriter& Image(uint32_t binding, VkImageView view, VkSampler sampler,
+        VkImageLayout layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+    {
+        m_imageInfos.push_back(VkDescriptorImageInfo{ sampler, view, layout });
+
+        m_writes.push_back(VkWriteDescriptorSet{});
+        VkWriteDescriptorSet& w = m_writes.back();
+        w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w.dstBinding = binding;
+        w.dstArrayElement = 0;
+        w.descriptorType = TypeOfBinding(binding);
+        w.descriptorCount = 1;
+        w.pImageInfo = &m_imageInfos.back();
+        return *this;
+    }
+
+    void Update(VkDevice device, VkDescriptorSet set)
+    {
+        for (auto& w : m_writes) w.dstSet = set;
+        vkUpdateDescriptorSets(device,
+            static_cast<uint32_t>(m_writes.size()),
+            m_writes.data(), 0, nullptr);
+    }
+
+private:
+    std::deque<VkDescriptorBufferInfo> m_bufferInfos;
+    std::deque<VkDescriptorImageInfo>  m_imageInfos;
+    std::vector<VkWriteDescriptorSet>  m_writes;
+};
+
+// Blend state factory -- opaque and transparent variants differ only in whether
+// blending is enabled, so build one and flip the flag.
+VkPipelineColorBlendAttachmentState MakeBlendAttachment(bool alphaBlend)
+{
+    VkPipelineColorBlendAttachmentState a{};
+    a.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    a.blendEnable = alphaBlend ? VK_TRUE : VK_FALSE;
+    if (alphaBlend) {
+        a.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        a.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        a.colorBlendOp = VK_BLEND_OP_ADD;
+        a.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        a.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        a.alphaBlendOp = VK_BLEND_OP_ADD;
+    }
+    return a;
+}
 
 GraphicsPipeline::GraphicsPipeline() {}
 GraphicsPipeline::~GraphicsPipeline() {}
 
 void GraphicsPipeline::CreateDescriptorSetLayout()
 {
-    VkDescriptorSetLayoutBinding uboLayoutBinding{};
-    uboLayoutBinding.binding = 0;
-    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    uboLayoutBinding.descriptorCount = 1;
-    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding diffuseSamplerBinding{};
-    diffuseSamplerBinding.binding = 1;
-    diffuseSamplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    diffuseSamplerBinding.descriptorCount = 1;
-    diffuseSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding metallicRoughnessSamplerBinding{};
-    metallicRoughnessSamplerBinding.binding = 2;
-    metallicRoughnessSamplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    metallicRoughnessSamplerBinding.descriptorCount = 1;
-    metallicRoughnessSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding irradianceBinding{};
-    irradianceBinding.binding = 3;
-    irradianceBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    irradianceBinding.descriptorCount = 1;
-    irradianceBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding prefilteredBinding{};
-    prefilteredBinding.binding = 4;
-    prefilteredBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    prefilteredBinding.descriptorCount = 1;
-    prefilteredBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding brdfLUTBinding{};
-    brdfLUTBinding.binding = 5;
-    brdfLUTBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    brdfLUTBinding.descriptorCount = 1;
-    brdfLUTBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding lightBufferBinding{};
-    lightBufferBinding.binding = 6;
-    lightBufferBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    lightBufferBinding.descriptorCount = 1;
-    lightBufferBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding clusterLightInfoBinding{};
-    clusterLightInfoBinding.binding = 7;
-    clusterLightInfoBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    clusterLightInfoBinding.descriptorCount = 1;
-    clusterLightInfoBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding lightIndexBinding{};
-    lightIndexBinding.binding = 8;
-    lightIndexBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    lightIndexBinding.descriptorCount = 1;
-    lightIndexBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding shadowMapBinding{};
-    shadowMapBinding.binding = 9;
-    shadowMapBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    shadowMapBinding.descriptorCount = 1;
-    shadowMapBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding rampBinding{};
-    rampBinding.binding = 10;
-    rampBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    rampBinding.descriptorCount = 1;
-    rampBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding normalSamplerBinding{};
-    normalSamplerBinding.binding = 11;
-    normalSamplerBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    normalSamplerBinding.descriptorCount = 1;
-    normalSamplerBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding shadowCmpBinding{};
-    shadowCmpBinding.binding = 12;
-    shadowCmpBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    shadowCmpBinding.descriptorCount = 1;
-    shadowCmpBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding bindings[] = {
-        uboLayoutBinding, diffuseSamplerBinding, metallicRoughnessSamplerBinding,
-        irradianceBinding, prefilteredBinding, brdfLUTBinding, lightBufferBinding,
-        clusterLightInfoBinding, lightIndexBinding, shadowMapBinding, rampBinding,
-        normalSamplerBinding, shadowCmpBinding
-    };
+    std::array<VkDescriptorSetLayoutBinding, kSceneBindingCount> bindings{};
+    for (uint32_t i = 0; i < kSceneBindingCount; i++) {
+        bindings[i].binding = kSceneBindings[i].binding;
+        bindings[i].descriptorType = kSceneBindings[i].type;
+        bindings[i].descriptorCount = kSceneBindings[i].count;
+        bindings[i].stageFlags = kSceneBindings[i].stages;
+        bindings[i].pImmutableSamplers = nullptr;
+    }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 13;
-    layoutInfo.pBindings = bindings;
+    layoutInfo.bindingCount = kSceneBindingCount;
+    layoutInfo.pBindings = bindings.data();
 
     if (vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create descriptor set layout");
@@ -113,18 +168,27 @@ void GraphicsPipeline::CreateDescriptorSetLayout()
 
 void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
 {
-    VkDescriptorPoolSize poolSizes[3]{};
-    poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    poolSizes[0].descriptorCount = maxSets;
-    poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSizes[1].descriptorCount = maxSets * 8; // bindings 1,2,3,4,5,9,11,12
-    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    poolSizes[2].descriptorCount = maxSets * 4; // lightBuffer, clusterLightInfo, lightIndex — 3 storage buffers now
+   // Accumulate one pool size per distinct descriptor type. Derived counts for
+   // the current table: UNIFORM_BUFFER = maxSets * 1,
+   // COMBINED_IMAGE_SAMPLER = maxSets * 8, STORAGE_BUFFER = maxSets * 4 
+    std::vector<VkDescriptorPoolSize> poolSizes;
+    poolSizes.reserve(4);
+
+    for (const auto& b : kSceneBindings) {
+        auto it = std::find_if(poolSizes.begin(), poolSizes.end(),
+            [&](const VkDescriptorPoolSize& p) { return p.type == b.type; });
+        if (it == poolSizes.end()) {
+            poolSizes.push_back(VkDescriptorPoolSize{ b.type, b.count * maxSets });
+        }
+        else {
+            it->descriptorCount += b.count * maxSets;
+        }
+    }
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.poolSizeCount = 3;
-    poolInfo.pPoolSizes = poolSizes;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     poolInfo.maxSets = maxSets;
 
     if (vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
@@ -134,15 +198,9 @@ void GraphicsPipeline::CreateDescriptorPool(uint32_t maxSets)
 
 std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
     const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
-    const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture, 
-    const VulkanTexture& normalTexture,
-    const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
-    const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
-    const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer, 
-    VkImageView shadowMapView, VkSampler shadowMapSampler, VkSampler shadowCompareSampler, 
-    const BufferAndMemory& rampBuffer)
+    const MaterialBindings& mb)
 {
-    uint32_t numImages = static_cast<uint32_t>(uniformBuffers.size());
+    const uint32_t numImages = static_cast<uint32_t>(uniformBuffers.size());
     std::vector<VkDescriptorSetLayout> layouts(numImages, m_descriptorSetLayout);
 
     VkDescriptorSetAllocateInfo allocInfo{};
@@ -157,165 +215,23 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
     }
 
     for (uint32_t i = 0; i < numImages; i++) {
-        VkDescriptorBufferInfo bufferInfo{};
-        bufferInfo.buffer = uniformBuffers[i].buffer;
-        bufferInfo.offset = 0;
-        bufferInfo.range = uniformDataSize;
-
-        VkDescriptorImageInfo diffuseInfo{};
-        diffuseInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        diffuseInfo.imageView = diffuseTexture.view;
-        diffuseInfo.sampler = diffuseTexture.sampler;
-
-        VkDescriptorImageInfo mrInfo{};
-        mrInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        mrInfo.imageView = metallicRoughnessTexture.view;
-        mrInfo.sampler = metallicRoughnessTexture.sampler;
-
-        VkDescriptorImageInfo irradianceInfo{};
-        irradianceInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        irradianceInfo.imageView = irradianceTexture.view;
-        irradianceInfo.sampler = irradianceTexture.sampler;
-
-        VkDescriptorImageInfo prefilteredInfo{};
-        prefilteredInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        prefilteredInfo.imageView = prefilteredTexture.view;
-        prefilteredInfo.sampler = prefilteredTexture.sampler;
-
-        VkDescriptorImageInfo brdfLUTInfo{};
-        brdfLUTInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        brdfLUTInfo.imageView = brdfLUTTexture.view;
-        brdfLUTInfo.sampler = brdfLUTTexture.sampler;
-
-        VkDescriptorBufferInfo lightBufferInfo{};
-        lightBufferInfo.buffer = lightBuffer.buffer;
-        lightBufferInfo.offset = 0;
-        lightBufferInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorBufferInfo clusterLightInfoInfo{};
-        clusterLightInfoInfo.buffer = clusterLightInfoBuffer.buffer;
-        clusterLightInfoInfo.offset = 0;
-        clusterLightInfoInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorBufferInfo lightIndexInfo{};
-        lightIndexInfo.buffer = lightIndexBuffer.buffer;
-        lightIndexInfo.offset = 0;
-        lightIndexInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorImageInfo shadowMapInfo{};
-        shadowMapInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        shadowMapInfo.imageView = shadowMapView;
-        shadowMapInfo.sampler = shadowMapSampler;
-
-        VkDescriptorBufferInfo rampInfo{};
-        rampInfo.buffer = rampBuffer.buffer;
-        rampInfo.offset = 0;
-        rampInfo.range = VK_WHOLE_SIZE;
-
-        VkDescriptorImageInfo normalInfo{};
-        normalInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        normalInfo.imageView = normalTexture.view;
-        normalInfo.sampler = normalTexture.sampler;
-
-        VkDescriptorImageInfo shadowCmpInfo{};
-        shadowCmpInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        shadowCmpInfo.imageView = shadowMapView;          // same view as binding 9
-        shadowCmpInfo.sampler = shadowCompareSampler;   // compare sampler
-
-        VkWriteDescriptorSet writes[13]{};
-
-        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[0].dstSet = sets[i];
-        writes[0].dstBinding = 0;
-        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        writes[0].descriptorCount = 1;
-        writes[0].pBufferInfo = &bufferInfo;
-
-        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[1].dstSet = sets[i];
-        writes[1].dstBinding = 1;
-        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[1].descriptorCount = 1;
-        writes[1].pImageInfo = &diffuseInfo;
-
-        writes[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[2].dstSet = sets[i];
-        writes[2].dstBinding = 2;
-        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[2].descriptorCount = 1;
-        writes[2].pImageInfo = &mrInfo;
-
-        writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[3].dstSet = sets[i];
-        writes[3].dstBinding = 3;
-        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[3].descriptorCount = 1;
-        writes[3].pImageInfo = &irradianceInfo;
-
-        writes[4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[4].dstSet = sets[i];
-        writes[4].dstBinding = 4;
-        writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[4].descriptorCount = 1;
-        writes[4].pImageInfo = &prefilteredInfo;
-
-        writes[5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[5].dstSet = sets[i];
-        writes[5].dstBinding = 5;
-        writes[5].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[5].descriptorCount = 1;
-        writes[5].pImageInfo = &brdfLUTInfo;
-
-        writes[6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[6].dstSet = sets[i];
-        writes[6].dstBinding = 6;
-        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[6].descriptorCount = 1;
-        writes[6].pBufferInfo = &lightBufferInfo;
-
-        writes[7].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[7].dstSet = sets[i];
-        writes[7].dstBinding = 7;
-        writes[7].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[7].descriptorCount = 1;
-        writes[7].pBufferInfo = &clusterLightInfoInfo;
-
-        writes[8].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[8].dstSet = sets[i];
-        writes[8].dstBinding = 8;
-        writes[8].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[8].descriptorCount = 1;
-        writes[8].pBufferInfo = &lightIndexInfo;
-
-        writes[9].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[9].dstSet = sets[i];
-        writes[9].dstBinding = 9;
-        writes[9].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[9].descriptorCount = 1;
-        writes[9].pImageInfo = &shadowMapInfo;
-
-        writes[10].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[10].dstSet = sets[i];
-        writes[10].dstBinding = 10;
-        writes[10].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        writes[10].descriptorCount = 1;
-        writes[10].pBufferInfo = &rampInfo;
-
-        writes[11].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[11].dstSet = sets[i];
-        writes[11].dstBinding = 11;
-        writes[11].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[11].descriptorCount = 1;
-        writes[11].pImageInfo = &normalInfo;
-
-        writes[12].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[12].dstSet = sets[i];
-        writes[12].dstBinding = 12;
-        writes[12].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[12].descriptorCount = 1;
-        writes[12].pImageInfo = &shadowCmpInfo;
-
-        vkUpdateDescriptorSets(m_device, 13, writes, 0, nullptr);
+        DescriptorWriter w;
+        w.Buffer(0, uniformBuffers[i].buffer, uniformDataSize)
+            .Image(1, mb.diffuse->view, mb.diffuse->sampler)
+            .Image(2, mb.metallicRoughness->view, mb.metallicRoughness->sampler)
+            .Image(3, mb.irradiance->view, mb.irradiance->sampler)
+            .Image(4, mb.prefiltered->view, mb.prefiltered->sampler)
+            .Image(5, mb.brdfLUT->view, mb.brdfLUT->sampler)
+            .Buffer(6, mb.lightBuffer)
+            .Buffer(7, mb.clusterLightInfoBuffer)
+            .Buffer(8, mb.lightIndexBuffer)
+            .Image(9, mb.shadowMapView, mb.shadowMapSampler)
+            .Buffer(10, mb.rampBuffer)
+            .Image(11, mb.normal->view, mb.normal->sampler)
+            // Binding 12 is the SAME image view as binding 9, paired with the
+            // compare sampler for hardware PCF (sampler2DShadow).
+            .Image(12, mb.shadowMapView, mb.shadowCompareSampler)
+            .Update(m_device, sets[i]);
     }
 
     return sets;
@@ -323,7 +239,7 @@ std::vector<VkDescriptorSet> GraphicsPipeline::CreateDescriptorSetsForMaterial(
 
 void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     VkFormat colorFormat, VkFormat depthFormat,
-    VkShaderModule vertShader, VkShaderModule fragShader, 
+    VkShaderModule vertShader, VkShaderModule fragShader,
     uint32_t maxDescriptorSets, VkFormat motionFormat, VkFormat normalFormat,
     VkFormat materialFormat)
 {
@@ -337,7 +253,6 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
     shaderStages[0].module = vertShader;
     shaderStages[0].pName = "main";
-
     shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
     shaderStages[1].module = fragShader;
@@ -401,19 +316,14 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
     depthStencil.depthBoundsTestEnable = VK_FALSE;
     depthStencil.stencilTestEnable = VK_FALSE;
 
-    VkPipelineColorBlendAttachmentState blendAttachments[4]{};
-    for (int i = 0; i < 4; i++) {
-        blendAttachments[i].blendEnable = VK_FALSE;
-        blendAttachments[i].colorWriteMask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    }
+    std::array<VkPipelineColorBlendAttachmentState, 4> opaqueBlend;
+    opaqueBlend.fill(MakeBlendAttachment(false));
 
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.logicOpEnable = VK_FALSE;
     colorBlending.attachmentCount = 4;
-    colorBlending.pAttachments = blendAttachments;
+    colorBlending.pAttachments = opaqueBlend.data();
 
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -433,6 +343,7 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
 
     // Dynamic rendering: describe attachment formats instead of using a VkRenderPass
     VkFormat colorFormats[4] = { colorFormat, motionFormat, normalFormat, materialFormat };
+
     VkPipelineRenderingCreateInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     renderingInfo.colorAttachmentCount = 4;
@@ -461,36 +372,37 @@ void GraphicsPipeline::Init(VulkanContext& context, GLFWwindow* window,
         throw std::runtime_error("Failed to create graphics pipeline");
     }
 
-    // Transparent variant: depth-write OFF + alpha blending on color attachment
+    // Transparent variant: depth-write OFF + alpha blending.
     VkPipelineDepthStencilStateCreateInfo depthStencilTransparent = depthStencil;
     depthStencilTransparent.depthWriteEnable = VK_FALSE;
 
-    // Blend state for glass: attachment 0 (HDR) alpha-blends; others keep writing opaquely for now.
-    VkPipelineColorBlendAttachmentState blendAttachmentsT[4]{};
-    for (int i = 0; i < 4; i++) {
-        blendAttachmentsT[i].blendEnable = VK_TRUE;
-        blendAttachmentsT[i].srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-        blendAttachmentsT[i].dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        blendAttachmentsT[i].colorBlendOp = VK_BLEND_OP_ADD;
-        blendAttachmentsT[i].srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-        blendAttachmentsT[i].dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
-        blendAttachmentsT[i].alphaBlendOp = VK_BLEND_OP_ADD;
-        blendAttachmentsT[i].colorWriteMask =
-            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-            VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    }
+    // Back-face cull for transparents. With CULL_MODE_NONE every glass shell
+    // blends twice (front and back face) and the veil compounds per layer.
+    // If the glass vanishes entirely, the asset's winding is reversed --
+    // switch to VK_CULL_MODE_FRONT_BIT.
+    VkPipelineRasterizationStateCreateInfo rasterizerTransparent = rasterizer;
+    rasterizerTransparent.cullMode = VK_CULL_MODE_BACK_BIT;
+
+    std::array<VkPipelineColorBlendAttachmentState, 4> transparentBlend;
+    transparentBlend.fill(MakeBlendAttachment(false));
+    transparentBlend[0] = MakeBlendAttachment(true);
 
     VkPipelineColorBlendStateCreateInfo colorBlendingTransparent = colorBlending;
-    colorBlendingTransparent.pAttachments = blendAttachmentsT;   // attachmentCount stays 4
+    colorBlendingTransparent.pAttachments = transparentBlend.data(); // attachmentCount stays 4
 
     VkGraphicsPipelineCreateInfo transparentInfo = pipelineInfo;
     transparentInfo.pDepthStencilState = &depthStencilTransparent;
+    transparentInfo.pRasterizationState = &rasterizerTransparent;
     transparentInfo.pColorBlendState = &colorBlendingTransparent;
 
     if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &transparentInfo, nullptr, &m_transparentPipeline) != VK_SUCCESS) {
         throw std::runtime_error("Failed to create transparent graphics pipeline");
     }
-
+    printf("Transparent pipeline: cullMode=%u  blendEnable=[%d %d %d %d]  depthWrite=%d\n",
+        rasterizerTransparent.cullMode,
+        transparentBlend[0].blendEnable, transparentBlend[1].blendEnable,
+        transparentBlend[2].blendEnable, transparentBlend[3].blendEnable,
+        depthStencilTransparent.depthWriteEnable);
     printf("Graphics pipeline created (dynamic rendering).\n");
 }
 
@@ -505,22 +417,18 @@ void GraphicsPipeline::Cleanup()
         vkDestroyDescriptorSetLayout(m_device, m_descriptorSetLayout, nullptr);
         m_descriptorSetLayout = VK_NULL_HANDLE;
     }
-
     if (m_descriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
         m_descriptorPool = VK_NULL_HANDLE;
     }
-
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
     }
-
     if (m_pipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
         m_pipelineLayout = VK_NULL_HANDLE;
     }
-
     if (m_transparentPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_device, m_transparentPipeline, nullptr);
         m_transparentPipeline = VK_NULL_HANDLE;

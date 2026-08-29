@@ -8,6 +8,25 @@ class VulkanContext;
 struct BufferAndMemory;
 struct VulkanTexture;
 
+struct MaterialBindings
+{
+    const VulkanTexture* diffuse = nullptr;
+    const VulkanTexture* metallicRoughness = nullptr;
+    const VulkanTexture* normal = nullptr;
+    const VulkanTexture* irradiance = nullptr;
+    const VulkanTexture* prefiltered = nullptr;
+    const VulkanTexture* brdfLUT = nullptr;
+
+    VkBuffer lightBuffer = VK_NULL_HANDLE;
+    VkBuffer clusterLightInfoBuffer = VK_NULL_HANDLE;
+    VkBuffer lightIndexBuffer = VK_NULL_HANDLE;
+    VkBuffer rampBuffer = VK_NULL_HANDLE;
+
+    VkImageView shadowMapView = VK_NULL_HANDLE;
+    VkSampler shadowMapSampler = VK_NULL_HANDLE;  // linear, binding 9
+    VkSampler shadowCompareSampler = VK_NULL_HANDLE;  // compare, binding 12
+};
+
 class GraphicsPipeline
 {
 public:
@@ -27,13 +46,7 @@ public:
 
     std::vector<VkDescriptorSet> CreateDescriptorSetsForMaterial(
         const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
-        const VulkanTexture& diffuseTexture, const VulkanTexture& metallicRoughnessTexture,
-        const VulkanTexture& normalTexture,
-        const VulkanTexture& irradianceTexture, const VulkanTexture& prefilteredTexture,
-        const VulkanTexture& brdfLUTTexture, const BufferAndMemory& lightBuffer,
-        const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer,
-        VkImageView shadowMapView, VkSampler shadowMapSampler, VkSampler shadowCompareSampler, 
-        const BufferAndMemory& rampBuffer);
+        const MaterialBindings& bindings);
 
     void PushParams(VkCommandBuffer commandBuffer, const RenderParams& params) const;
     void BindTransparent(VkCommandBuffer cb) const {

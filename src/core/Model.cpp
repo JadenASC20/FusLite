@@ -1,10 +1,6 @@
 #include "Model.h"
 #include "VulkanContext.h"
 #include "GraphicsPipeline.h"
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
-#include <assimp/material.h>
 #include <stdexcept>
 #include <cstdio>
 #include <filesystem>
@@ -13,7 +9,7 @@
 #include "cgltf.h"
 
 
-static bool DecodeCgltfImage(VulkanContext& context, const cgltf_data* data,
+static bool DecodeCgltfImage(VulkanContext& context,
     const cgltf_image* image, const std::filesystem::path& modelDir,
     bool isColorData, VulkanTexture& outTex)
 {
@@ -40,29 +36,20 @@ static bool DecodeCgltfImage(VulkanContext& context, const cgltf_data* data,
     return false;
 }
 
-VulkanTexture Model::LoadCgltfTexture(VulkanContext& context, const cgltf_data* data,
+VulkanTexture Model::LoadCgltfTexture(VulkanContext& context,
     const cgltf_texture_view* texView, const std::filesystem::path& modelDir,
-    const char* debugLabel, bool isColorData)
+    const char* debugLabel, bool isColorData, glm::vec4 fallbackColor)
 {
     if (texView && texView->texture && texView->texture->image) {
         VulkanTexture tex;
         printf("Loading %s texture\n", debugLabel);
-        if (DecodeCgltfImage(context, data, texView->texture->image, modelDir, isColorData, tex))
+        if (DecodeCgltfImage(context, texView->texture->image, modelDir, isColorData, tex))
             return tex;
     }
 
-    // Defaults matching your Assimp loader's fallbacks.
-    if (std::string(debugLabel) == "metallic-roughness") {
-        printf("Material has no %s texture, using default (roughness 1.0, non-metal)\n", debugLabel);
-        // R=unused, G=roughness=1, B=metallic=0 scalar drives via multiply
-        return context.CreateSolidColorTexture(0.0f, 1.0f, 0.0f, 1.0f, false);
-    }
-    if (std::string(debugLabel) == "normal") {
-        return context.CreateSolidColorTexture(0.5f, 0.5f, 1.0f, 1.0f, false);
-    }
-    // diffuse fallback: flat white (role table / factors will tint)
-    printf("Material has no %s texture, using flat white\n", debugLabel);
-    return context.CreateSolidColorTexture(1.0f, 1.0f, 1.0f, 1.0f, true);
+    printf("Material has no %s texture, using default\n", debugLabel);
+    return context.CreateSolidColorTexture(fallbackColor.r, fallbackColor.g,
+        fallbackColor.b, fallbackColor.a, isColorData);
 }
 
 void Model::LoadFromFile(VulkanContext& context, const std::string& path)
@@ -96,16 +83,16 @@ void Model::LoadFromFile(VulkanContext& context, const std::string& path)
         const cgltf_pbr_metallic_roughness& pbr = mat.pbr_metallic_roughness;
 
         // Diffuse / base color (sRGB)
-        m_diffuseTextures[m] = LoadCgltfTexture(context, data,
-            &pbr.base_color_texture, modelDir, "diffuse", true);
+        m_diffuseTextures[m] = LoadCgltfTexture(context, &pbr.base_color_texture,
+            modelDir, "diffuse", true, glm::vec4(1, 1, 1, 1));
 
         // Metallic-roughness (linear). glTF packs it as one texture: G=roughness, B=metallic.
-        m_metallicRoughnessTextures[m] = LoadCgltfTexture(context, data,
-            &pbr.metallic_roughness_texture, modelDir, "metallic-roughness", false);
+        m_metallicRoughnessTextures[m] = LoadCgltfTexture(context, &pbr.metallic_roughness_texture,
+            modelDir, "metallic-roughness", false, glm::vec4(0, 1, 0, 1)); // G=rough 1, B=metal 0
 
         // Normal (linear)
-        m_normalTextures[m] = LoadCgltfTexture(context, data,
-            &mat.normal_texture, modelDir, "normal", false);
+        m_normalTextures[m] = LoadCgltfTexture(context, &mat.normal_texture,
+            modelDir, "normal", false, glm::vec4(0.5f, 0.5f, 1, 1));       // flat tangent-space
 
         MaterialParams mp;
         mp.name = (matName && matName[0]) ? matName : ("Material " + std::to_string(m));
@@ -248,14 +235,30 @@ void Model::CreateDescriptorSets(GraphicsPipeline& pipeline,
     const std::vector<BufferAndMemory>& uniformBuffers, size_t uniformDataSize,
     const VulkanContext::IBLTextures& iblTextures, const BufferAndMemory& lightBuffer,
     const BufferAndMemory& clusterLightInfoBuffer, const BufferAndMemory& lightIndexBuffer,
-    VkImageView shadowMapView, VkSampler shadowMapSampler, VkSampler shadowCompareSampler, const BufferAndMemory& rampBuffer) {
+    VkImageView shadowMapView, VkSampler shadowMapSampler, VkSampler shadowCompareSampler,
+    const BufferAndMemory& rampBuffer)
+{
+    // Everything that doesn't vary per material.
+    MaterialBindings mb;
+    mb.irradiance = &iblTextures.irradiance;
+    mb.prefiltered = &iblTextures.prefilteredSpecular;
+    mb.brdfLUT = &iblTextures.brdfLUT;
+    mb.lightBuffer = lightBuffer.buffer;
+    mb.clusterLightInfoBuffer = clusterLightInfoBuffer.buffer;
+    mb.lightIndexBuffer = lightIndexBuffer.buffer;
+    mb.rampBuffer = rampBuffer.buffer;
+    mb.shadowMapView = shadowMapView;
+    mb.shadowMapSampler = shadowMapSampler;
+    mb.shadowCompareSampler = shadowCompareSampler;
+
     m_descriptorSets.resize(m_diffuseTextures.size());
     for (size_t matIdx = 0; matIdx < m_diffuseTextures.size(); matIdx++) {
-        m_descriptorSets[matIdx] = pipeline.CreateDescriptorSetsForMaterial(
-            uniformBuffers, uniformDataSize, m_diffuseTextures[matIdx], m_metallicRoughnessTextures[matIdx],
-            m_normalTextures[matIdx],
-            iblTextures.irradiance, iblTextures.prefilteredSpecular, iblTextures.brdfLUT, lightBuffer,
-            clusterLightInfoBuffer, lightIndexBuffer, shadowMapView, shadowMapSampler, shadowCompareSampler, rampBuffer);
+        mb.diffuse = &m_diffuseTextures[matIdx];
+        mb.metallicRoughness = &m_metallicRoughnessTextures[matIdx];
+        mb.normal = &m_normalTextures[matIdx];
+
+        m_descriptorSets[matIdx] =
+            pipeline.CreateDescriptorSetsForMaterial(uniformBuffers, uniformDataSize, mb);
     }
 }
 
