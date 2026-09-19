@@ -22,18 +22,21 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 // Converts a screen-space point (in pixels) at a given view-space depth into a view-space position
+
 vec3 ScreenToView(vec2 screenPos, float viewZ)
 {
+    // unproject at NDC z = 0.0 to get some point on the camera ray through this pixel
     vec2 ndc = (screenPos / pc.screenSize) * 2.0 - 1.0;
     vec4 clip = vec4(ndc, 0.0, 1.0);
     vec4 view = pc.invProj * clip;
     view /= view.w;
-    // Scale the unprojected direction out to the target depth
+
+    // slides it along the ray until its z equals the requested depth    
     return view.xyz * (viewZ / view.z);
 }
 
-// Standard logarithmic depth slicing — gives finer resolution near the camera,
-// coarser resolution far away, matching how depth precision naturally behaves.
+// Exponential (log-uniform) depth slicing
+// each slice is a constant ratio thicker than the last rather than a constant amount.
 float ClusterZToViewZ(int zSlice)
 {
     float ratio = pc.farZ / pc.nearZ;

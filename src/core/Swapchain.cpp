@@ -74,9 +74,9 @@ void Swapchain::Init(VulkanContext& context, uint32_t windowWidth, uint32_t wind
     vkGetSwapchainImagesKHR(context.GetDevice(), m_swapchain, &actualImageCount, m_images.data());
 
     CreateImageViews();
-
-    printf("Swapchain created: %u images, %ux%u, format %d\n",
-        actualImageCount, extent.width, extent.height, static_cast<int>(m_imageFormat));
+    // VKPRESENTMODEMAILBOX = 1 (uncapped), VKPRESENTMODEFIFO = 2 (vsync)
+    printf("Swapchain created: %u images, %ux%u, format %d, present mode %d\n",
+        actualImageCount, extent.width, extent.height, static_cast<int>(m_imageFormat), static_cast<int>(presentMode));
 }
 
 uint32_t Swapchain::ChooseNumImages(const VkSurfaceCapabilitiesKHR& capabilities)

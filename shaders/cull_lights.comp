@@ -45,7 +45,11 @@ layout(push_constant) uniform PushConstants {
     int numLights;
 } pc;
 
-// Sphere-vs-AABB intersection test — the actual culling logic
+// Sphere-vs-AABB intersection test
+
+// An AABB is a Cartesian product of three intervals, and squared Euclidean
+// distance is a sum of independent per-axis terms, so each axis can be
+// minimized separately. 
 bool SphereIntersectsAABB(vec3 sphereCenter, float sphereRadius, vec3 aabbMin, vec3 aabbMax)
 {
     vec3 closestPoint = clamp(sphereCenter, aabbMin, aabbMax);

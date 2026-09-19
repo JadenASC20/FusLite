@@ -84,6 +84,7 @@ public:
     VkCommandBuffer CommandBuffer(uint32_t imageIndex) const { return m_commandBuffers[imageIndex]; }
     uint32_t        ImageCount()  const { return static_cast<uint32_t>(m_swapchain.GetImages().size()); }
     float           AspectRatio() const { return float(m_width) / float(m_height); }
+    void BuildClusterGrid(const glm::mat4& proj);
 
 private:
     // Init is split so each stage reads as one idea. Order between them

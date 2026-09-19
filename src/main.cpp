@@ -135,6 +135,7 @@ int main()
         scene.objects = renderer.Description().objects;
         scene.lights = DefaultSceneLights();
         BindModelMaterialsToScene(scene, renderer.Models());
+        renderer.BuildClusterGrid(camera.GetProjectionMatrixNoJitter());
 
         RenderParams renderParams{};
         renderParams.clusterGridAndScreen =

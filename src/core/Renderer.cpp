@@ -120,16 +120,29 @@ void Renderer::CreateDeviceAndTargets(GLFWwindow* window, uint32_t width, uint32
 void Renderer::CreateClusteredLighting()
 {
     m_clusterBuilder.Init(m_context);
-
-    const glm::mat4 proj = glm::perspective(glm::radians(45.0f), AspectRatio(), kNearZ, kFarZ);
-    m_clusterBuilder.BuildClusters(m_context, glm::inverse(proj),
-        float(m_width), float(m_height), kNearZ, kFarZ);
-
     m_lightBuffer = m_context.CreateStorageBuffer(sizeof(GPULight) * MAX_LIGHTS);
     m_lightCuller.Init(m_context, m_clusterBuilder.GetClusterBuffer(), m_lightBuffer);
 
     m_rampBuffer = m_context.CreateStorageBuffer(
         sizeof(glm::vec4) * MAX_RAMP_OBJECTS * RAMP_RESOLUTION);
+}
+
+void Renderer::BuildClusterGrid(const glm::mat4& proj)
+{
+    m_clusterBuilder.BuildClusters(m_context, glm::inverse(proj),
+        float(m_width), float(m_height), kNearZ, kFarZ);
+
+    struct ClusterDbg { glm::vec4 minB; glm::vec4 maxB; };
+    const uint32_t idx = 0 + 0 * CLUSTER_GRID_X
+        + (CLUSTER_GRID_Z / 2) * CLUSTER_GRID_X * CLUSTER_GRID_Y;
+
+    void* mapped = nullptr;
+    vkMapMemory(Device(), m_clusterBuilder.GetClusterBuffer().memory,
+        0, VK_WHOLE_SIZE, 0, &mapped);
+    const ClusterDbg* c = reinterpret_cast<const ClusterDbg*>(mapped);
+    printf("cluster (0,0,mid) view-space Y bounds: [%.3f, %.3f]\n",
+        c[idx].minB.y, c[idx].maxB.y);
+    vkUnmapMemory(Device(), m_clusterBuilder.GetClusterBuffer().memory);
 }
 
 void Renderer::CreateSceneAssets(GLFWwindow* window, ScenePreset preset)
@@ -378,8 +391,6 @@ float Renderer::MeasureLuminance(int frameInFlight) const
 
 void Renderer::CullAndUploadLights(const Scene& scene, const glm::mat4& view)
 {
-    m_lightCuller.CullLights(m_context, view, MAX_LIGHTS);
-
     // Pad unused slots with inert lights so the culler always sees a full array.
     std::vector<GPULight> lights(MAX_LIGHTS);
     for (int i = 0; i < MAX_LIGHTS; i++) {
@@ -395,6 +406,7 @@ void Renderer::CullAndUploadLights(const Scene& scene, const glm::mat4& view)
     }
 
     UploadToBuffer(Device(), m_lightBuffer, lights.data(), sizeof(GPULight) * MAX_LIGHTS);
+    m_lightCuller.CullLights(m_context, view, MAX_LIGHTS);
 }
 
 void Renderer::UploadPenumbraRamps(const Scene& scene)
