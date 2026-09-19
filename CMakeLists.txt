@@ -8,16 +8,6 @@ find_package(Vulkan REQUIRED)
 
 include(FetchContent)
 
-set(IMGUI_DIR "$ENV{USERPROFILE}/Documents/imgui" CACHE PATH "Path to local ImGui clone")
-set(IMGUIZMO_DIR "$ENV{USERPROFILE}/Documents/ImGuizmo/src" CACHE PATH "Path to local ImGuizmo clone")
-
-if(NOT EXISTS "${IMGUI_DIR}/imgui.h")
-    message(FATAL_ERROR "ImGui not found at ${IMGUI_DIR} — clone it there or set IMGUI_DIR")
-endif()
-if(NOT EXISTS "${IMGUIZMO_DIR}/ImGuizmo.h")
-    message(FATAL_ERROR "ImGuizmo not found at ${IMGUIZMO_DIR} — clone it there or set IMGUIZMO_DIR")
-endif()
-
 FetchContent_Declare(
     glfw
     GIT_REPOSITORY https://github.com/glfw/glfw.git
@@ -54,13 +44,20 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(stb)
 
 FetchContent_Declare(
-    assimp
-    GIT_REPOSITORY https://github.com/assimp/assimp.git
-    GIT_TAG v5.4.3
+    imgui
+    GIT_REPOSITORY https://github.com/ocornut/imgui.git
+    GIT_TAG v1.91.9
 )
-set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(assimp)
+FetchContent_Declare(
+    imguizmo
+    GIT_REPOSITORY https://github.com/CedricGuillemet/ImGuizmo.git
+    GIT_TAG 18cef5e031d8c6973d80284c67f60549fafd78c1
+    SOURCE_SUBDIR  do-not-build
+)
+FetchContent_MakeAvailable(imgui imguizmo)
+
+set(IMGUI_DIR "${imgui_SOURCE_DIR}")
+set(IMGUIZMO_DIR "${imguizmo_SOURCE_DIR}/src")
 
 add_executable(FusLite 
     src/main.cpp 
@@ -111,7 +108,6 @@ add_executable(FusLite
 target_link_libraries(FusLite PRIVATE
     glfw
     volk
-    assimp
     Vulkan::Vulkan
 )
 

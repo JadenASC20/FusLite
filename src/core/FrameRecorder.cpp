@@ -189,7 +189,7 @@ namespace {
     void RecordScenePass(VkCommandBuffer cmd, const PassResources& res, const FrameParams& frame,
         const FrameTargets& t, const std::vector<Model>& models, const Scene& scene)
     {
-        GpuLabel _lbl(cmd, "Scene G-Buffer", 0.3f, 0.7f, 0.3f);
+        GpuLabel _lbl(cmd, "Forward+ Scene", 0.3f, 0.7f, 0.3f);
 
         ToColorAttachment(cmd, t.hdrImage);
         ToColorAttachment(cmd, t.motionImage);
